@@ -1,0 +1,13 @@
+name: "tea-sommelier"
+acli_version: "1.2.1"
+agent_directory: "tea_agent"
+region: "us-east1"
+base_template: "local_TeaBot"
+generated_at: "2026-09-07T20:25:56.775048+00:00"
+language: "python"
+create_params:
+  deployment_target: "none"
+  session_type: "in_memory"
+  cicd_runner: "skip"
+  is_a2a: true
+  agent_guidance_filename: "AGENTS.md"

@@ -1,0 +1,25 @@
+{
+  "eval_cases": [
+    {
+      "eval_case_id": "compare_longjing_biluochun",
+      "prompt": {
+        "role": "user",
+        "parts": [{"text": "Сравни Лунцзин и Би Ло Чунь, что мягче"}]
+      }
+    },
+    {
+      "eval_case_id": "soft_morning_beginner",
+      "prompt": {
+        "role": "user",
+        "parts": [{"text": "Я новичок, хочу мягкий чай без горечи утром"}]
+      }
+    },
+    {
+      "eval_case_id": "price_no_shop",
+      "prompt": {
+        "role": "user",
+        "parts": [{"text": "Сколько стоит Лунцзин?"}]
+      }
+    }
+  ]
+}
