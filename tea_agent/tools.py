@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from tea_agent.shop_catalog import find_products
 from tea_agent.slug_index import china_green_slugs, resolve_query
 from tea_agent.tea_support import compact_tea_card, get_json
 
@@ -165,4 +166,52 @@ def ask_sommelier(question: str) -> dict[str, Any]:
         "sources": payload.get("sources") or [],
         "source": "tea.support /ask fallback",
         "warning": "Fallback only. Prefer resolve_tea, search_teas, get_tea_card, compare_teas.",
+    }
+
+
+def find_in_shop(slug: str = "", query: str = "") -> dict[str, Any]:
+    """Find teashop.by products to buy: price in BYN, availability, product URL.
+
+    Call after resolve_tea / search_teas when recommending teas or when the user
+    asks price / where to buy. Prefer slug from resolve_tea; query is a fallback
+    Russian product name. Do not invent prices or URLs — only return tool data.
+
+    Args:
+        slug: tea.support slug (preferred), e.g. biluochun.
+        query: Free-text shop/product name if slug is unknown.
+
+    Returns:
+        Dict with matching shop products including product_url and price_from_byn.
+    """
+    slug_n = (slug or "").strip()
+    query_n = (query or "").strip()
+    if not slug_n and not query_n:
+        return {
+            "status": "error",
+            "error": "need_slug_or_query",
+            "hint": "Pass slug from resolve_tea or a product name query.",
+        }
+    products = find_products(slug=slug_n or None, query=query_n or None, limit=5)
+    if not products:
+        return {
+            "status": "not_found",
+            "slug": slug_n or None,
+            "query": query_n or None,
+            "products": [],
+            "hint": (
+                "No teashop.by match in the local catalog. "
+                "Recommend the tea by taste/brewing without inventing a price."
+            ),
+            "source": "teashop.by local catalog",
+        }
+    return {
+        "status": "success",
+        "slug": slug_n or None,
+        "query": query_n or None,
+        "products": products,
+        "source": "teashop.by local catalog",
+        "note": (
+            "Prices are from teashop.by (BYN). Always give the product_url. "
+            "Taste/terroir facts still come from tea.support tools."
+        ),
     }

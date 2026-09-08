@@ -78,6 +78,7 @@ EXTRA_ALIASES: dict[str, list[str]] = {
     "huangshan-mao-feng": [
         "Хуаншань Мао Фэн",
         "Хуаншань Маофэн",
+        "Хуан Шань Мао Фэн",
         "Huangshan Maofeng",
         "黄山毛峰",
     ],

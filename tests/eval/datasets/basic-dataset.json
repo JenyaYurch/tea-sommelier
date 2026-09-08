@@ -15,7 +15,7 @@
       }
     },
     {
-      "eval_case_id": "price_no_shop",
+      "eval_case_id": "price_longjing_shop",
       "prompt": {
         "role": "user",
         "parts": [{"text": "Сколько стоит Лунцзин?"}]
