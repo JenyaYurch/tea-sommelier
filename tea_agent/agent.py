@@ -18,6 +18,9 @@ from google.adk.apps import App
 from google.adk.models import Gemini
 from google.genai import types
 
+from tea_agent.brewing_agent import brewing_agent
+from tea_agent.onboarding_agent import onboarding_agent
+from tea_agent.profile_tools import save_taste_profile
 from tea_agent.tools import (
     ask_sommelier,
     compare_teas,
@@ -37,6 +40,20 @@ INSTRUCTION = """
 Специализация: сорта вроде Лунцзин, Би Ло Чунь, Аньцзи Бай Ча, Тай Пин Хоу Куй, Люань Гуапянь, Хуаншань Мао Фэн; терруар, сезон сбора, жарка vs пар.
 Другие типы чая, кофе, алкоголь — коротко скажи, что это вне специализации, и предложи китайский зелёный аналог через tools, если уместно.
 
+Профиль сессии (если пусто — ещё не собран):
+- experience: {experience?}
+- taste_profile: {taste_profile?}
+- budget: {budget?}
+- caffeine_pref: {caffeine_pref?}
+- vessel: {vessel?}
+- liked_teas: {liked_teas?}
+- profile_complete: {profile_complete?}
+
+Маршрутизация sub-agents:
+- onboarding_agent — ТОЛЬКО если нужен персональный подбор, а в сообщении И в state нет одновременно опыта и вкуса/вайба. Если пользователь уже сказал «новичок» + вкус («мягкий без горечи утром») — НЕ вызывай onboarding: сразу search_teas и 3 рекомендации; при желании save_taste_profile сам.
+- brewing_agent — вопросы «как заварить», температура, граммовка, проливы, кружка vs гайвань.
+После возврата из sub-agent продолжай рекомендации сам.
+
 Инструменты (факты ТОЛЬКО из них):
 1. resolve_tea — русское/английское/пиньинь имя → slug. Всегда, если пользователь назвал сорт.
 2. search_teas — поиск по вайбу. Передай vibe на английском (например "soft no bitterness morning green").
@@ -44,11 +61,11 @@ INSTRUCTION = """
 4. similar_teas — похожие после известного slug.
 5. compare_teas — сравнение двух slug. Для «Лунцзин vs Би Ло Чунь» сначала resolve_tea оба, затем compare_teas. Не вызывай ask_sommelier.
 6. find_in_shop — витрина teashop.by: цена BYN, наличие, product_url. После resolve_tea передай slug; если slug нет — query с названием.
-7. ask_sommelier — ТОЛЬКО если остальные tools вернули пусто или ошибку.
-
-Анкета, если не хватает данных (по одному-двум вопросам, не стеной): опыт → вкус → бюджет → кофеин → посуда.
+7. save_taste_profile — сохранить профиль, если пользователь уже дал опыт/вкус без полного онбординга.
+8. ask_sommelier — ТОЛЬКО если остальные tools вернули пусто или ошибку.
 
 Рекомендации: ровно 3 сорта, у каждого «почему» по данным tools, brewing из карточки, и ссылка teashop.by из find_in_shop (если нашлось).
+Учитывай сохранённый профиль, если он есть.
 Для каждого рекомендованного сорта вызови find_in_shop(slug=...). В ответе дай кликабельный product_url; цену называй только из tool (BYN). Если not_found — не выдумывай цену/ссылку, просто порекомендуй сорт.
 Если спрашивают «сколько стоит / где купить» — resolve_tea → find_in_shop; не бери цену из памяти.
 Вкус/терруар — только tea.support; цена/ссылка — только find_in_shop. Не смешивай.
@@ -74,8 +91,10 @@ root_agent = Agent(
         similar_teas,
         compare_teas,
         find_in_shop,
+        save_taste_profile,
         ask_sommelier,
     ],
+    sub_agents=[onboarding_agent, brewing_agent],
 )
 
 app = App(
