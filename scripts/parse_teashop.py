@@ -25,8 +25,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tea_agent.shop_catalog import parse_price_byn  # noqa: E402
-from tea_agent.slug_index import china_green_slugs, resolve_query  # noqa: E402
+from tea_agent.shop_catalog import (  # noqa: E402
+    match_product_to_slug,
+    parse_price_byn,
+    remap_unmatched_items,
+)
 
 logger = logging.getLogger("parse_teashop")
 
@@ -93,22 +96,11 @@ def _availability(product: Any) -> str:
     return "in_stock"
 
 
-def _match_slug(product_name: str) -> tuple[str | None, str]:
+def _match_slug(
+    product_name: str, product_url: str | None = None
+) -> tuple[str | None, str]:
     """Return (slug, confidence) using the local China-green dictionary."""
-    matches = resolve_query(product_name, limit=3)
-    allowed = china_green_slugs()
-    for row in matches:
-        slug = str(row.get("slug") or "")
-        score = int(row.get("score") or 0)
-        if slug not in allowed:
-            continue
-        if score >= 80:
-            return slug, "high"
-        if score >= 50:
-            return slug, "medium"
-        if score >= 40:
-            return slug, "low"
-    return None, "none"
+    return match_product_to_slug(product_name, product_url)
 
 
 def parse_catalog(
@@ -208,7 +200,9 @@ def parse_catalog(
                     logger.info("Skip detail %s: %s", link, exc)
                 time.sleep(0.5)
 
-            matched_slug, confidence = _match_slug(name)
+            matched_slug, confidence = _match_slug(
+                name, link if isinstance(link, str) else None
+            )
             harvest = None
             year_match = re.search(r"\b(20\d{2})\b", name)
             if year_match:
@@ -282,6 +276,11 @@ def main() -> None:
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
+        "--remap-existing",
+        action="store_true",
+        help="Fill unmatched slugs in an existing catalog JSON without fetching the site",
+    )
+    parser.add_argument(
         "--out",
         type=Path,
         default=ROOT / "data" / "teashop_catalog.json",
@@ -292,6 +291,43 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(message)s",
         level=logging.INFO,
     )
+
+    if args.remap_existing:
+        if not args.out.exists():
+            raise SystemExit(f"Catalog not found: {args.out}")
+        payload = json.loads(args.out.read_text(encoding="utf-8"))
+        items = payload.get("items") if isinstance(payload, dict) else payload
+        if not isinstance(items, list):
+            raise SystemExit("Catalog JSON has no items list")
+        filled = remap_unmatched_items(items)
+        matched = sum(1 for i in items if isinstance(i, dict) and i.get("matched_slug"))
+        logger.info(
+            "Remapped %d previously unmatched items (%d total with slug)",
+            filled,
+            matched,
+        )
+        if args.dry_run:
+            for item in items:
+                if not isinstance(item, dict) or not item.get("matched_slug"):
+                    continue
+                logger.info(
+                    "%s | %s | %s",
+                    item.get("product_name"),
+                    item.get("matched_slug"),
+                    item.get("mapping_confidence"),
+                )
+            return
+        if isinstance(payload, dict):
+            payload["count"] = len(items)
+            payload["items"] = items
+            args.out.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        else:
+            write_catalog(items, args.out)
+        logger.info("Wrote %s (%d items)", args.out, len(items))
+        return
 
     items = parse_catalog(
         max_pages=args.max_pages,

@@ -9,7 +9,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from tea_agent.slug_index import fold_text
+from tea_agent.slug_index import china_green_slugs, fold_text, resolve_query
+
+# teashop.by URL slugs that the name matcher cannot disambiguate.
+URL_SLUG_OVERRIDES: dict[str, tuple[str, str]] = {
+    "yunnan-maofen-tou-chun": ("yun-nan-mao-feng", "high"),
+    "maofeng": ("yun-nan-mao-feng", "high"),
+    "junnan-jun-u": ("yun-wu-lu-cha", "medium"),
+}
 
 
 def _catalog_path() -> Path:
@@ -58,6 +65,55 @@ def load_catalog() -> list[dict[str, Any]]:
 def reload_catalog() -> list[dict[str, Any]]:
     load_catalog.cache_clear()
     return load_catalog()
+
+
+def _product_url_key(product_url: str | None) -> str:
+    if not product_url:
+        return ""
+    return str(product_url).rstrip("/").rsplit("/", 1)[-1].lower()
+
+
+def match_product_to_slug(
+    product_name: str,
+    product_url: str | None = None,
+) -> tuple[str | None, str]:
+    """Map a shop product to a China-green tea.support slug."""
+    url_key = _product_url_key(product_url)
+    if url_key in URL_SLUG_OVERRIDES:
+        return URL_SLUG_OVERRIDES[url_key]
+
+    matches = resolve_query(product_name, limit=3)
+    allowed = china_green_slugs()
+    for row in matches:
+        slug = str(row.get("slug") or "")
+        score = int(row.get("score") or 0)
+        if slug not in allowed:
+            continue
+        if score >= 80:
+            return slug, "high"
+        if score >= 50:
+            return slug, "medium"
+        if score >= 40:
+            return slug, "low"
+    return None, "none"
+
+
+def remap_unmatched_items(items: list[dict[str, Any]]) -> int:
+    """Fill matched_slug only where it is currently empty. Returns how many filled."""
+    filled = 0
+    for item in items:
+        if item.get("matched_slug"):
+            continue
+        slug, confidence = match_product_to_slug(
+            str(item.get("product_name") or ""),
+            item.get("product_url"),
+        )
+        if not slug:
+            continue
+        item["matched_slug"] = slug
+        item["mapping_confidence"] = confidence
+        filled += 1
+    return filled
 
 
 def find_products(

@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 TRACE = Path("artifacts/traces/traces_20260908_215121.json")
-OUT = Path("artifacts/traces/_summary.json")
+OUT = Path("artifacts/eval_debug/_summary.json")
 
 TOOL_RE = re.compile(
     r"(resolve_tea|search_teas|get_tea_card|similar_teas|compare_teas|"

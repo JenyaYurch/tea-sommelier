@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 TRACE = Path("artifacts/traces/traces_20260908_215121.json")
-OUT = Path("artifacts/traces/_tool_calls.json")
+OUT = Path("artifacts/eval_debug/_tool_calls.json")
 
 
 def collect_calls(obj, calls: list[dict], path: str = "") -> None:
