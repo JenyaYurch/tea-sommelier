@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -71,6 +72,12 @@ def _final_response(case: dict) -> str:
 
 def main() -> int:
     load_dotenv(ROOT / ".env")
+    # Windows consoles default to cp1252; judge explanations may contain
+    # Cyrillic/symbols that would crash print() with UnicodeEncodeError.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
     if len(sys.argv) < 2:
         print(
             "Usage: uv run python scripts/grade_traces_local.py <traces.json>",
@@ -87,7 +94,10 @@ def main() -> int:
 
     results = []
     print(f"Grading {len(cases)} case(s) from {traces_path.name}")
-    for case in cases:
+    for i, case in enumerate(cases):
+        if i > 0:
+            # Free-tier judge is ~5 req/min: pace calls to avoid 429.
+            time.sleep(6)
         case_id = case.get("eval_case_id") or "?"
         instance = {
             "prompt": _prompt_text(case),
@@ -96,10 +106,24 @@ def main() -> int:
             "reference": case.get("reference"),
         }
         print(f"  · {case_id} ...", flush=True)
-        try:
-            verdict = evaluate(instance)
-        except Exception as exc:  # noqa: BLE001 — surface judge errors
-            verdict = {"score": 0, "explanation": f"{type(exc).__name__}: {exc}"}
+        verdict = None
+        for attempt in range(4):
+            try:
+                verdict = evaluate(instance)
+                break
+            except Exception as exc:  # noqa: BLE001 — surface judge errors
+                msg = f"{type(exc).__name__}: {exc}"
+                # Retry only transient judge errors: 5xx (model overloaded) and
+                # per-minute 429. PerDay quota 429 is pointless to retry.
+                transient = "503" in msg or "500" in msg or "UNAVAILABLE" in msg
+                per_minute_429 = "429" in msg and "PerMinute" in msg
+                if (transient or per_minute_429) and attempt < 3:
+                    wait = 15 * (attempt + 1)
+                    print(f"    transient judge error, retry in {wait}s: {msg[:100]}")
+                    time.sleep(wait)
+                    continue
+                verdict = {"score": 0, "explanation": msg}
+                break
         row = {
             "eval_case_id": case_id,
             "score": verdict.get("score"),

@@ -148,6 +148,8 @@ dmypy.json
 
 
 tmp*
+.tmp_eval/
+artifacts/
 .agents-cli-scripts/
 
 # Node
