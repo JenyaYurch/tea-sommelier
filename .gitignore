@@ -209,3 +209,7 @@ tools/a2a-inspector/
 *.pem
 *-key.json
 credentials*.json
+service-account*.json
+**/application_default_credentials.json
+.env.*
+!.env.example

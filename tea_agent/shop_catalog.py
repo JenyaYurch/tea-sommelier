@@ -11,6 +11,9 @@ from typing import Any
 
 from tea_agent.slug_index import china_green_slugs, fold_text, resolve_query
 
+# Refresh cadence for the partner feed (TEA-19).
+REFRESH_INTERVAL_DAYS = 14
+
 # teashop.by URL slugs that the name matcher cannot disambiguate.
 URL_SLUG_OVERRIDES: dict[str, tuple[str, str]] = {
     "yunnan-maofen-tou-chun": ("yun-nan-mao-feng", "high"),
@@ -31,6 +34,29 @@ def _catalog_path() -> Path:
     return candidates[0]
 
 
+def _parse_iso_date(value: Any) -> date | None:
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value.strip()[:10])
+    except ValueError:
+        return None
+
+
+@lru_cache(maxsize=1)
+def load_catalog_document() -> dict[str, Any]:
+    """Load the catalog JSON envelope (meta + items). Empty dict if missing."""
+    path = _catalog_path()
+    if not path.exists():
+        return {}
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, list):
+        return {"items": raw, "count": len(raw)}
+    return {}
+
+
 def parse_price_byn(price_text: str | None) -> float | None:
     """Normalize teashop price text like '29,50 р.' to float BYN."""
     if not price_text:
@@ -49,20 +75,15 @@ def parse_price_byn(price_text: str | None) -> float | None:
 
 @lru_cache(maxsize=1)
 def load_catalog() -> list[dict[str, Any]]:
-    path = _catalog_path()
-    if not path.exists():
-        return []
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(raw, dict) and "items" in raw:
-        items = raw["items"]
-    elif isinstance(raw, list):
-        items = raw
-    else:
+    doc = load_catalog_document()
+    items = doc.get("items") if doc else None
+    if not isinstance(items, list):
         return []
     return [item for item in items if isinstance(item, dict)]
 
 
 def reload_catalog() -> list[dict[str, Any]]:
+    load_catalog_document.cache_clear()
     load_catalog.cache_clear()
     return load_catalog()
 
@@ -187,12 +208,57 @@ def find_products(
     return out
 
 
+def catalog_last_checked() -> str | None:
+    """Return catalog-level last_checked (prefer envelope, else newest item)."""
+    doc = load_catalog_document()
+    for key in ("last_checked", "generated_on"):
+        value = doc.get(key) if doc else None
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:10]
+    items = load_catalog()
+    dates = [
+        d
+        for d in (_parse_iso_date(item.get("last_checked")) for item in items)
+        if d is not None
+    ]
+    if not dates:
+        return None
+    return max(dates).isoformat()
+
+
+def catalog_freshness(
+    *,
+    today: date | None = None,
+    refresh_interval_days: int = REFRESH_INTERVAL_DAYS,
+) -> dict[str, Any]:
+    """Report how fresh the partner catalog is and whether a refresh is due."""
+    now = today or date.today()
+    last_checked = catalog_last_checked()
+    checked_on = _parse_iso_date(last_checked)
+    age_days = (now - checked_on).days if checked_on else None
+    needs_refresh = age_days is None or age_days >= refresh_interval_days
+    return {
+        "last_checked": last_checked,
+        "age_days": age_days,
+        "refresh_interval_days": refresh_interval_days,
+        "needs_refresh": needs_refresh,
+        "as_of": now.isoformat(),
+    }
+
+
 def catalog_meta() -> dict[str, Any]:
     path = _catalog_path()
     items = load_catalog()
+    doc = load_catalog_document()
+    freshness = catalog_freshness()
     return {
         "path": str(path),
         "count": len(items),
         "exists": path.exists(),
-        "generated_on": date.today().isoformat() if items else None,
+        "source": doc.get("source") if doc else None,
+        "generated_on": doc.get("generated_on") if doc else None,
+        "last_checked": freshness["last_checked"],
+        "age_days": freshness["age_days"],
+        "needs_refresh": freshness["needs_refresh"],
+        "refresh_interval_days": freshness["refresh_interval_days"],
     }

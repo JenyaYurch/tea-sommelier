@@ -1,6 +1,13 @@
 """Scrape teashop.by green-tea category into data/teashop_catalog.json.
 
+Biweekly refresh checklist (every 1–2 weeks):
+  1. uv run python scripts/parse_teashop.py --status
+  2. If needs_refresh: uv run python scripts/parse_teashop.py
+  3. Spot-check 2–3 products (price / availability / product_url)
+  4. Commit data/teashop_catalog.json when the feed looks good
+
 Usage:
+  uv run python scripts/parse_teashop.py --status
   uv run python scripts/parse_teashop.py
   uv run python scripts/parse_teashop.py --max-pages 6 --dry-run
 """
@@ -26,6 +33,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tea_agent.shop_catalog import (  # noqa: E402
+    REFRESH_INTERVAL_DAYS,
+    catalog_freshness,
+    catalog_meta,
     match_product_to_slug,
     parse_price_byn,
     remap_unmatched_items,
@@ -253,10 +263,13 @@ def _dedupe_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def write_catalog(items: list[dict[str, Any]], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     items = _dedupe_items(items)
+    today = date.today().isoformat()
     payload = {
         "source": "teashop.by",
         "category_url": CATEGORY_URL,
-        "generated_on": date.today().isoformat(),
+        "generated_on": today,
+        "last_checked": today,
+        "refresh_interval_days": REFRESH_INTERVAL_DAYS,
         "count": len(items),
         "items": items,
     }
@@ -266,8 +279,34 @@ def write_catalog(items: list[dict[str, Any]], path: Path) -> None:
     )
 
 
+def print_status() -> int:
+    """Print catalog freshness; exit 1 when a refresh is due."""
+    meta = catalog_meta()
+    freshness = catalog_freshness()
+    print(f"path: {meta['path']}")
+    print(f"exists: {meta['exists']}")
+    print(f"count: {meta['count']}")
+    print(f"last_checked: {freshness['last_checked']}")
+    print(f"age_days: {freshness['age_days']}")
+    print(f"refresh_interval_days: {freshness['refresh_interval_days']}")
+    print(f"needs_refresh: {freshness['needs_refresh']}")
+    if freshness["needs_refresh"]:
+        print(
+            "Action: run `uv run python scripts/parse_teashop.py` "
+            "then commit data/teashop_catalog.json"
+        )
+        return 1
+    print("Catalog is within the 1–2 week refresh window.")
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Parse teashop.by green teas")
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Show last_checked / freshness and exit 1 if refresh is due",
+    )
     parser.add_argument("--max-pages", type=int, default=6)
     parser.add_argument(
         "--no-details",
@@ -291,6 +330,9 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(message)s",
         level=logging.INFO,
     )
+
+    if args.status:
+        raise SystemExit(print_status())
 
     if args.remap_existing:
         if not args.out.exists():

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 
 from tea_agent.shop_catalog import (
+    catalog_freshness,
+    catalog_meta,
     find_products,
     match_product_to_slug,
     parse_price_byn,
@@ -185,3 +188,66 @@ def test_real_catalog_find_in_shop_mapped_slugs() -> None:
         assert result["status"] == "success", slug
         assert result["products"][0]["product_url"]
         assert result["products"][0]["matched_slug"] == slug
+
+
+def test_catalog_meta_reads_last_checked(tmp_path: Path, monkeypatch) -> None:
+    catalog = {
+        "source": "teashop.by",
+        "generated_on": "2026-09-08",
+        "last_checked": "2026-09-08",
+        "refresh_interval_days": 14,
+        "count": 1,
+        "items": [
+            {
+                "product_name": "Си Ху Лун Цзин",
+                "matched_slug": "xihu-longjing",
+                "last_checked": "2026-09-08",
+            }
+        ],
+    }
+    path = tmp_path / "teashop_catalog.json"
+    path.write_text(json.dumps(catalog), encoding="utf-8")
+    monkeypatch.setattr("tea_agent.shop_catalog._catalog_path", lambda: path)
+    reload_catalog()
+
+    meta = catalog_meta()
+    assert meta["last_checked"] == "2026-09-08"
+    assert meta["generated_on"] == "2026-09-08"
+    assert meta["count"] == 1
+
+    fresh = catalog_freshness(today=date(2026, 9, 15))
+    assert fresh["age_days"] == 7
+    assert fresh["needs_refresh"] is False
+
+    stale = catalog_freshness(today=date(2026, 9, 22))
+    assert stale["age_days"] == 14
+    assert stale["needs_refresh"] is True
+
+
+def test_catalog_freshness_falls_back_to_item_dates(
+    tmp_path: Path, monkeypatch
+) -> None:
+    catalog = {
+        "items": [
+            {"product_name": "A", "last_checked": "2026-09-01"},
+            {"product_name": "B", "last_checked": "2026-09-10"},
+        ]
+    }
+    path = tmp_path / "teashop_catalog.json"
+    path.write_text(json.dumps(catalog), encoding="utf-8")
+    monkeypatch.setattr("tea_agent.shop_catalog._catalog_path", lambda: path)
+    reload_catalog()
+
+    fresh = catalog_freshness(today=date(2026, 9, 15))
+    assert fresh["last_checked"] == "2026-09-10"
+    assert fresh["age_days"] == 5
+    assert fresh["needs_refresh"] is False
+
+
+def test_real_catalog_has_last_checked() -> None:
+    reload_catalog()
+    meta = catalog_meta()
+    assert meta["exists"] is True
+    assert meta["count"] > 0
+    assert meta["last_checked"]
+    assert isinstance(meta["last_checked"], str)

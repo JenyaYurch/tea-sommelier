@@ -13,12 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+
 from google.adk.agents import Agent
 from google.adk.apps import App
 from google.adk.models import Gemini
 from google.genai import types
 
 from tea_agent.brewing_agent import brewing_agent
+from tea_agent.next_steps import attach_next_steps_to_response, collect_shop_hits
 from tea_agent.onboarding_agent import onboarding_agent
 from tea_agent.profile_tools import save_taste_profile
 from tea_agent.tools import (
@@ -31,7 +34,7 @@ from tea_agent.tools import (
     similar_teas,
 )
 
-MODEL = "gemini-3.6-flash"
+MODEL = os.environ.get("TEA_AGENT_MODEL", "gemini-3.6-flash")
 
 INSTRUCTION = """
 Ты — специализированный сомелье по зелёному китайскому чаю (не общий чайный бот).
@@ -50,7 +53,7 @@ INSTRUCTION = """
 - profile_complete: {profile_complete?}
 
 Маршрутизация sub-agents:
-- onboarding_agent — ТОЛЬКО если нужен персональный подбор, а в сообщении И в state нет одновременно опыта и вкуса/вайба. Если пользователь уже сказал «новичок» + вкус («мягкий без горечи утром») — НЕ вызывай onboarding: сразу search_teas и 3 рекомендации; при желании save_taste_profile сам.
+- onboarding_agent — ТОЛЬКО если нужен персональный подбор, а в сообщении И в state нет одновременно опыта и вкуса/вайба. Если пользователь уже сказал «новичок» + вкус («мягкий без горечи утром») — НЕ вызывай onboarding: сразу search_teas и 3 рекомендации; при желании save_taste_profile сам. Подарок/покупка с бюджетом («подарок до 20 евро», «что купить») — тоже БЕЗ onboarding: сразу подбери 2–3 популярных сорта с витрины в пределах бюджета через find_in_shop (цены/ссылки только из tool) и предложи уточнить вкус получателя для точного подбора.
 - brewing_agent — вопросы «как заварить», температура, граммовка, проливы, кружка vs гайвань.
 После возврата из sub-agent продолжай рекомендации сам.
 
@@ -67,9 +70,15 @@ INSTRUCTION = """
 Рекомендации: ровно 3 сорта, у каждого «почему» по данным tools, brewing из карточки, и ссылка teashop.by из find_in_shop (если нашлось).
 Учитывай сохранённый профиль, если он есть.
 Для каждого рекомендованного сорта вызови find_in_shop(slug=...). В ответе дай кликабельный product_url; цену называй только из tool (BYN). Если not_found — не выдумывай цену/ссылку, просто порекомендуй сорт.
+Если пользователь хочет купить / подарок с бюджетом — рекомендуй в первую очередь то, что реально есть на витрине: если кандидаты из search_teas вернули not_found, проверь через resolve_tea → find_in_shop ещё 2–3 популярных сорта (не более 5–6 вызовов find_in_shop суммарно) и собери 3 варианта с ценой и ссылкой. Только если витрина совсем пуста — рекомендуй без цен.
 Если спрашивают «сколько стоит / где купить» — resolve_tea → find_in_shop; не бери цену из памяти.
 Вкус/терруар — только tea.support; цена/ссылка — только find_in_shop. Не смешивай.
 После любых tool-вызовов всегда дай законченный ответ пользователю на русском. Не заканчивай ход пустым сообщением.
+После ровно 3 рекомендаций и после витрины/подарка в конце ответа добавь блок:
+### Что дальше
+[мягче] [дешевле] [без горечи] [подарок] [подробнее]
+и для каждого товара из find_in_shop — markdown-ссылку [Купить: <имя из tool>](<product_url из tool>).
+«Купить» — только product_url из find_in_shop, не выдумывай ссылку. Если not_found — чип [купить] без URL, без выдуманного адреса.
 Не давай медицинских обещаний (лечение, давление, детокс). Кофеин — информационно.
 
 Если tool вернул error/timeout — скажи, что источник временно недоступен, не подменяй память модели.
@@ -95,6 +104,8 @@ root_agent = Agent(
         ask_sommelier,
     ],
     sub_agents=[onboarding_agent, brewing_agent],
+    after_tool_callback=collect_shop_hits,
+    after_model_callback=attach_next_steps_to_response,
 )
 
 app = App(

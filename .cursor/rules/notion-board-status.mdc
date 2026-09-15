@@ -1,0 +1,36 @@
+---
+description: Sync TeaBot Notion board Status when a task is started or finished
+alwaysApply: true
+---
+
+# Notion board status
+
+Keep [TeaBot Board](https://www.notion.so/e9ac72418e71476a96bb026e155eb121) in sync. Property `Status` (select), exact values:
+
+`Backlog` | `To Do` | `In Progress` | `Review` | `Done` | `Blocked`
+
+## Взял в разработку → In Progress
+
+Before writing code, search the board and set `Status` = `In Progress`.
+
+Triggers: user picks a card, "давай сделаем X", "возьми задачу", implementing a named board item.
+
+## Выполнил → Done
+
+After the card's acceptance criteria are actually met, set `Status` = `Done`.
+
+Triggers: user says выполнил / готово / done, or you finished the checklist.
+
+## How (Notion MCP)
+
+1. Auth if the Notion namespace needs it (`mcp_auth`).
+2. Search/fetch the card on TeaBot Board (do not invent a page).
+3. `notion-update-page`: `command=update_properties`, `Status` = `In Progress` or `Done`.
+4. Tell the user the card moved.
+
+## Do not
+
+- Use other labels (`Done` not `DONE`; `In Progress` not `In progress`).
+- Mark `Done` if tests fail, the user still owes a decision, or work is blocked (`Blocked` instead).
+- Leave a started card on `To Do` / `Backlog`.
+- Create a duplicate card if search finds none — ask which task to update.

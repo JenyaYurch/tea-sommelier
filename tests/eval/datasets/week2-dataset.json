@@ -1,0 +1,39 @@
+{
+  "eval_cases": [
+    {
+      "eval_case_id": "gift_under_20_eur",
+      "prompt": {
+        "role": "user",
+        "parts": [{"text": "Хочу подарить другу зелёный чай, бюджет до 20 евро. Что можно взять?"}]
+      }
+    },
+    {
+      "eval_case_id": "brew_mug_only",
+      "prompt": {
+        "role": "user",
+        "parts": [{"text": "У меня только кружка, никакой гайвани. Как заварить зелёный чай?"}]
+      }
+    },
+    {
+      "eval_case_id": "partner_shop_showcase",
+      "prompt": {
+        "role": "user",
+        "parts": [{"text": "Покажи, что можно купить у партнёра"}]
+      }
+    },
+    {
+      "eval_case_id": "onboarding_new_user",
+      "prompt": {
+        "role": "user",
+        "parts": [{"text": "Привет! Я никогда не пил китайский чай, хочу начать, но не знаю что выбрать"}]
+      }
+    },
+    {
+      "eval_case_id": "next_steps_three_recs",
+      "prompt": {
+        "role": "user",
+        "parts": [{"text": "Я новичок, хочу мягкий чай без горечи утром. Дай 3 рекомендации."}]
+      }
+    }
+  ]
+}

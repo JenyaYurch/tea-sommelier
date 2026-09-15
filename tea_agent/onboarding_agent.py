@@ -1,12 +1,14 @@
 """Onboarding sub-agent: collect taste profile into session state."""
 
+import os
+
 from google.adk.agents import Agent
 from google.adk.models import Gemini
 from google.genai import types
 
 from tea_agent.profile_tools import save_taste_profile
 
-MODEL = "gemini-3.6-flash"
+MODEL = os.environ.get("TEA_AGENT_MODEL", "gemini-3.6-flash")
 
 ONBOARDING_INSTRUCTION = """
 Ты — онбординг-ассистент сомелье по зелёному китайскому чаю.

@@ -14,11 +14,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google.adk.runners import Runner
 from google.genai import types
-from telegram import Update
+from telegram import Message, Update
 from telegram.constants import ChatAction
 from telegram.error import Conflict
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -27,7 +28,13 @@ from telegram.ext import (
 
 from tea_agent.agent import app as adk_app
 from tea_agent.app_utils import services
-from telegram_integration.split import split_telegram_text
+from telegram_integration.keyboard import (
+    CALLBACK_PATTERN,
+    parse_action_callback,
+    prepare_telegram_reply,
+    telegram_session_id,
+    telegram_user_key,
+)
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -107,8 +114,8 @@ def _event_text(event) -> str:
 
 
 async def ask_agent(runner: Runner, telegram_user_id: int, text: str) -> str:
-    user_id = f"tg_{telegram_user_id}"
-    session_id = f"tg_sess_{telegram_user_id}"
+    user_id = telegram_user_key(telegram_user_id)
+    session_id = telegram_session_id(telegram_user_id)
     message = types.Content(role="user", parts=[types.Part.from_text(text=text)])
     pieces: list[str] = []
     async for event in runner.run_async(
@@ -122,6 +129,50 @@ async def ask_agent(runner: Runner, telegram_user_id: int, text: str) -> str:
     return "\n\n".join(pieces).strip()
 
 
+async def _deliver_reply(target: Message, text: str) -> None:
+    chunks, markup = prepare_telegram_reply(text)
+    if not chunks:
+        await target.reply_text(UNAVAILABLE_TEXT)
+        return
+    last = len(chunks) - 1
+    for index, chunk in enumerate(chunks):
+        keyboard = markup if index == last else None
+        await target.reply_text(chunk, reply_markup=keyboard)
+
+
+async def _run_agent_and_reply(
+    *,
+    target: Message,
+    telegram_user_id: int,
+    text: str,
+    bot,
+    runner: Runner,
+) -> None:
+    stop = asyncio.Event()
+    typing_task = asyncio.create_task(_typing_loop(target.chat_id, bot, stop))
+    try:
+        reply = await ask_agent(runner, telegram_user_id, text)
+        if not reply:
+            reply = UNAVAILABLE_TEXT
+    except Exception as err:
+        if _is_quota_error(err):
+            logger.warning(
+                "Gemini quota exhausted for telegram user %s", telegram_user_id
+            )
+            reply = QUOTA_TEXT
+        else:
+            logger.exception("agent failed for telegram user %s", telegram_user_id)
+            reply = UNAVAILABLE_TEXT
+    finally:
+        stop.set()
+        typing_task.cancel()
+        try:
+            await typing_task
+        except asyncio.CancelledError:
+            pass
+    await _deliver_reply(target, reply)
+
+
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message:
         await update.message.reply_text(START_TEXT)
@@ -132,33 +183,35 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not message or not message.text or not user:
         return
-
     runner: Runner = context.application.bot_data["runner"]
-    stop = asyncio.Event()
-    typing_task = asyncio.create_task(
-        _typing_loop(message.chat_id, context.bot, stop)
+    await _run_agent_and_reply(
+        target=message,
+        telegram_user_id=user.id,
+        text=message.text,
+        bot=context.bot,
+        runner=runner,
     )
-    try:
-        reply = await ask_agent(runner, user.id, message.text)
-        if not reply:
-            reply = UNAVAILABLE_TEXT
-    except Exception as err:
-        if _is_quota_error(err):
-            logger.warning("Gemini quota exhausted for telegram user %s", user.id)
-            reply = QUOTA_TEXT
-        else:
-            logger.exception("agent failed for telegram user %s", user.id)
-            reply = UNAVAILABLE_TEXT
-    finally:
-        stop.set()
-        typing_task.cancel()
-        try:
-            await typing_task
-        except asyncio.CancelledError:
-            pass
 
-    for chunk in split_telegram_text(reply):
-        await message.reply_text(chunk)
+
+async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    user = update.effective_user
+    if not query or not user:
+        return
+    label = parse_action_callback(query.data)
+    message = query.message if isinstance(query.message, Message) else None
+    if not label or message is None:
+        await query.answer()
+        return
+    await query.answer()
+    runner: Runner = context.application.bot_data["runner"]
+    await _run_agent_and_reply(
+        target=message,
+        telegram_user_id=user.id,
+        text=label,
+        bot=context.bot,
+        runner=runner,
+    )
 
 
 async def post_init(application: Application) -> None:
@@ -187,6 +240,9 @@ def main() -> None:
     )
     application.bot_data["runner"] = _build_runner()
     application.add_handler(CommandHandler("start", start_cmd))
+    application.add_handler(
+        CallbackQueryHandler(on_callback, pattern=CALLBACK_PATTERN)
+    )
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     application.add_error_handler(on_error)
     logger.info("Starting Telegram polling (Ctrl+C to stop)")

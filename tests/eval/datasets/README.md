@@ -2,6 +2,11 @@
 
 This directory contains evaluation datasets for testing agent behavior.
 
+- `basic-dataset.json` — week 1 cases (compare, beginner rec, price, medical, mug brewing).
+- `week2-dataset.json` — week 2 cases: shop (`gift_under_20_eur`, `partner_shop_showcase`),
+  brewing (`brew_mug_only`), onboarding (`onboarding_new_user`),
+  next-step chips (`next_steps_three_recs`).
+
 ## Running Evaluations
 
 ### Default Dataset
@@ -10,6 +15,17 @@ This directory contains evaluation datasets for testing agent behavior.
 agents-cli eval generate
 agents-cli eval grade
 ```
+
+### Local gotchas (AI Studio key, no GCP project)
+
+- `eval generate` needs any non-empty `GOOGLE_CLOUD_PROJECT` (the Vertex eval SDK
+  builds a BigQuery client at startup; a placeholder works, no calls are made):
+  ` $env:GOOGLE_CLOUD_PROJECT='teabot-local-eval'; agents-cli eval generate ... `
+- Free tier for `gemini-3.6-flash` is ~5 req/min and ~20 req/day. Run large
+  datasets as single-case slices (see `.tmp_eval/case_*.json`) with ~60 s pauses,
+  then merge with `scripts/merge_traces.py`.
+- The judge (`tests/eval/response_quality.py`) runs on `gemini-3.5-flash` with a
+  `gemini-3.1-flash-lite` fallback so it doesn't share the agent's daily quota.
 
 ### Custom Dataset
 ```bash
