@@ -21,6 +21,8 @@ WORKDIR /code
 COPY ./pyproject.toml ./README.md ./uv.lock* ./
 
 COPY ./tea_agent ./tea_agent
+COPY ./telegram_integration ./telegram_integration
+COPY ./data ./data
 
 RUN uv sync --frozen
 

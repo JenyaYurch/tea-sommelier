@@ -1,1 +1,1 @@
-"""Local Telegram polling for the tea sommelier."""
+"""Telegram polling (local) and Cloud Run webhook."""

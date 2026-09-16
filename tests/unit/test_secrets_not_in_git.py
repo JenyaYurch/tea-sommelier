@@ -46,3 +46,4 @@ def test_env_example_has_placeholders_only() -> None:
     assert "your-telegram-bot-token" in text
     assert "GEMINI_API_KEY=AIza" not in text
     assert "TELEGRAM_BOT_TOKEN=" + "1" * 20 not in text
+    assert "deploy_cloud_run.py --execute" in text

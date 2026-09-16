@@ -72,15 +72,27 @@ You can also use features from the [ADK](https://adk.dev/) CLI with `uv run adk`
 
 Edit your agent logic in `tea_agent/agent.py` and test with `agents-cli playground` - it auto-reloads on save.
 
-## Deployment
+## Telegram
+
+Local polling (process must stay running):
 
 ```bash
-gcloud config set project <your-project-id>
-agents-cli deploy
+uv run python -m telegram_integration
 ```
 
-To add CI/CD and Terraform, run `agents-cli scaffold enhance`.
-To set up your production infrastructure, run `agents-cli infra cicd`.
+Production is two Cloud Run services (`tea-agent` + `telegram-integration`) in `europe-central2`. Webhook path is `<SERVICE_URL>/<TELEGRAM_BOT_TOKEN>`. Telegram is deployed twice: placeholder `SERVICE_URL=https://google.com`, then the real Cloud Run URL.
+
+```bash
+uv run python scripts/setup_secret_manager.py
+uv run python scripts/deploy_cloud_run.py
+uv run python scripts/deploy_cloud_run.py --execute
+```
+
+`--execute` deploys for real. Do not run local polling and the webhook at the same time (Telegram allows one getUpdates client).
+
+## Deployment
+
+Week 3 uses the two-service Cloud Run script above, not `agents-cli deploy`. To add CI/CD and Terraform later, run `agents-cli scaffold enhance`.
 
 ## Observability
 

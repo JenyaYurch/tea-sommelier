@@ -1,7 +1,9 @@
-"""Local Telegram polling for the tea sommelier.
+# ruff: noqa: RUF001
+"""Telegram bot: local polling or Cloud Run webhook (TEA-10 / TEA-13).
 
-Dev-only: the bot answers while this process is running. Production webhook
-+ Cloud Run is a later phase (see the architecture doc).
+Polling (default): in-process ADK Runner. Stops when this process stops.
+Webhook: PORT + SERVICE_URL set. Forwards text to tea-agent via HTTP.
+Webhook URL: <SERVICE_URL>/<TELEGRAM_BOT_TOKEN>.
 """
 
 from __future__ import annotations
@@ -12,8 +14,6 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from google.adk.runners import Runner
-from google.genai import types
 from telegram import Message, Update
 from telegram.constants import ChatAction
 from telegram.error import Conflict
@@ -26,8 +26,12 @@ from telegram.ext import (
     filters,
 )
 
-from tea_agent.agent import app as adk_app
-from tea_agent.app_utils import services
+from telegram_integration.adk_client import AdkClientError, AdkHttpClient, AdkQuotaError
+from telegram_integration.deploy_spec import (
+    ADK_APP_NAME,
+    is_webhook_mode,
+    normalize_service_url,
+)
 from telegram_integration.keyboard import (
     CALLBACK_PATTERN,
     parse_action_callback,
@@ -47,9 +51,7 @@ logger = logging.getLogger("telegram_integration")
 START_TEXT = (
     "Привет, я сомелье по зелёному китайскому чаю.\n\n"
     "Напишите, какой вкус хотите (мягкий, без горечи, утро), "
-    "или спросите про сорт — Лунцзин, Би Ло Чунь, Аньцзи Бай Ча.\n\n"
-    "Пока я работаю локально: если процесс на компьютере остановлен, "
-    "в Telegram я молчу."
+    "или спросите про сорт — Лунцзин, Би Ло Чунь, Аньцзи Бай Ча."
 )
 UNAVAILABLE_TEXT = (
     "Сомелье временно недоступен. Попробуйте ещё раз через минуту."
@@ -62,6 +64,8 @@ TYPING_INTERVAL_SEC = 4.0
 
 
 def _is_quota_error(err: BaseException | None) -> bool:
+    if isinstance(err, AdkQuotaError):
+        return True
     seen: set[int] = set()
     while err is not None and id(err) not in seen:
         seen.add(id(err))
@@ -84,25 +88,26 @@ def _require_token() -> str:
     return token
 
 
-def _build_runner() -> Runner:
+def _adk_http_client() -> AdkHttpClient | None:
+    url = os.getenv("ADK_SERVER_URL", "").strip()
+    if not url:
+        return None
+    app_name = os.getenv("ADK_APP_NAME", ADK_APP_NAME).strip() or ADK_APP_NAME
+    return AdkHttpClient(url, app_name)
+
+
+def _build_local_runner():
+    from google.adk.runners import Runner
+
+    from tea_agent.agent import app as adk_app
+    from tea_agent.app_utils import services
+
     return Runner(
         app=adk_app,
         session_service=services.get_session_service(),
         artifact_service=services.get_artifact_service(),
         auto_create_session=True,
     )
-
-
-async def _typing_loop(chat_id: int, bot, stop: asyncio.Event) -> None:
-    while not stop.is_set():
-        try:
-            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-        except Exception:
-            logger.debug("typing action failed", exc_info=True)
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=TYPING_INTERVAL_SEC)
-        except asyncio.TimeoutError:
-            continue
 
 
 def _event_text(event) -> str:
@@ -113,7 +118,9 @@ def _event_text(event) -> str:
     return "".join(part.text or "" for part in event.content.parts).strip()
 
 
-async def ask_agent(runner: Runner, telegram_user_id: int, text: str) -> str:
+async def ask_agent_local(runner, telegram_user_id: int, text: str) -> str:
+    from google.genai import types
+
     user_id = telegram_user_key(telegram_user_id)
     session_id = telegram_session_id(telegram_user_id)
     message = types.Content(role="user", parts=[types.Part.from_text(text=text)])
@@ -127,6 +134,36 @@ async def ask_agent(runner: Runner, telegram_user_id: int, text: str) -> str:
         if piece:
             pieces.append(piece)
     return "\n\n".join(pieces).strip()
+
+
+async def ask_agent_remote(client: AdkHttpClient, telegram_user_id: int, text: str) -> str:
+    return await client.ask(
+        telegram_user_key(telegram_user_id),
+        telegram_session_id(telegram_user_id),
+        text,
+    )
+
+
+async def ask_agent(bot_data: dict, telegram_user_id: int, text: str) -> str:
+    client = bot_data.get("adk_client")
+    if isinstance(client, AdkHttpClient):
+        return await ask_agent_remote(client, telegram_user_id, text)
+    runner = bot_data.get("runner")
+    if runner is None:
+        raise AdkClientError("No ADK backend configured")
+    return await ask_agent_local(runner, telegram_user_id, text)
+
+
+async def _typing_loop(chat_id: int, bot, stop: asyncio.Event) -> None:
+    while not stop.is_set():
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        except Exception:
+            logger.debug("typing action failed", exc_info=True)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=TYPING_INTERVAL_SEC)
+        except TimeoutError:
+            continue
 
 
 async def _deliver_reply(target: Message, text: str) -> None:
@@ -146,12 +183,12 @@ async def _run_agent_and_reply(
     telegram_user_id: int,
     text: str,
     bot,
-    runner: Runner,
+    bot_data: dict,
 ) -> None:
     stop = asyncio.Event()
     typing_task = asyncio.create_task(_typing_loop(target.chat_id, bot, stop))
     try:
-        reply = await ask_agent(runner, telegram_user_id, text)
+        reply = await ask_agent(bot_data, telegram_user_id, text)
         if not reply:
             reply = UNAVAILABLE_TEXT
     except Exception as err:
@@ -183,13 +220,12 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not message or not message.text or not user:
         return
-    runner: Runner = context.application.bot_data["runner"]
     await _run_agent_and_reply(
         target=message,
         telegram_user_id=user.id,
         text=message.text,
         bot=context.bot,
-        runner=runner,
+        bot_data=context.application.bot_data,
     )
 
 
@@ -204,20 +240,24 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await query.answer()
         return
     await query.answer()
-    runner: Runner = context.application.bot_data["runner"]
     await _run_agent_and_reply(
         target=message,
         telegram_user_id=user.id,
         text=label,
         bot=context.bot,
-        runner=runner,
+        bot_data=context.application.bot_data,
     )
 
 
-async def post_init(application: Application) -> None:
+async def post_init_polling(application: Application) -> None:
     await application.bot.delete_webhook(drop_pending_updates=True)
     me = await application.bot.get_me()
     logger.info("Polling as @%s (live while this process runs)", me.username)
+
+
+async def post_init_webhook(application: Application) -> None:
+    me = await application.bot.get_me()
+    logger.info("Webhook as @%s (url_path is the bot token, not logged)", me.username)
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -228,23 +268,51 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.exception("Telegram handler error", exc_info=err)
 
 
+def _attach_backend(application: Application, *, webhook: bool) -> None:
+    client = _adk_http_client()
+    if client is not None:
+        application.bot_data["adk_client"] = client
+        logger.info("ADK backend: HTTP %s app=%s", client.base_url, client.app_name)
+        return
+    if webhook:
+        raise SystemExit(
+            "Webhook mode requires ADK_SERVER_URL (tea-agent Cloud Run URL)"
+        )
+    application.bot_data["runner"] = _build_local_runner()
+    logger.info("ADK backend: in-process Runner")
+
+
 def main() -> None:
     _load_env()
     token = _require_token()
+    port = os.getenv("PORT")
+    service_url = os.getenv("SERVICE_URL")
+    webhook = is_webhook_mode(port=port, service_url=service_url)
     application = (
         Application.builder()
         .token(token)
-        .post_init(post_init)
+        .post_init(post_init_webhook if webhook else post_init_polling)
         .concurrent_updates(True)
         .build()
     )
-    application.bot_data["runner"] = _build_runner()
+    _attach_backend(application, webhook=webhook)
     application.add_handler(CommandHandler("start", start_cmd))
     application.add_handler(
         CallbackQueryHandler(on_callback, pattern=CALLBACK_PATTERN)
     )
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     application.add_error_handler(on_error)
+    if webhook:
+        listen_url = normalize_service_url(service_url or "")
+        logger.info("Starting Telegram webhook on port %s", port)
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=int(port or "8080"),
+            url_path=token,
+            webhook_url=f"{listen_url}/{token}",
+            allowed_updates=Update.ALL_TYPES,
+        )
+        return
     logger.info("Starting Telegram polling (Ctrl+C to stop)")
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
