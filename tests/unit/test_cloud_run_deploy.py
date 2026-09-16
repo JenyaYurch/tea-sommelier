@@ -68,6 +68,18 @@ def test_agent_deploy_uses_secret_manager_not_plaintext_key() -> None:
     assert "GOOGLE_API_KEY=GOOGLE_API_KEY:latest" in joined
     assert "AIza" not in joined
     assert "--allow-unauthenticated" in args
+    assert "GOOGLE_CLOUD_AGENT_ENGINE_ID=" not in joined
+
+
+def test_agent_deploy_passes_memory_bank_engine_when_set() -> None:
+    args = agent_deploy_args(
+        project="demo-proj",
+        agent_engine_id="engine-123",
+        agent_engine_location="eu",
+    )
+    env = next(item for item in args if item.startswith("--set-env-vars="))
+    assert "GOOGLE_CLOUD_AGENT_ENGINE_ID=engine-123" in env
+    assert "GOOGLE_CLOUD_AGENT_ENGINE_LOCATION=eu" in env
 
 
 def test_agent_dockerfile_copies_catalog_data() -> None:

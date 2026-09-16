@@ -91,15 +91,45 @@ def _project_id(cli_project: str | None) -> str:
     ).strip()
 
 
+def _agent_engine_env() -> tuple[str | None, str | None]:
+    env = _read_dotenv()
+    engine_id = (
+        os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID")
+        or env.get("GOOGLE_CLOUD_AGENT_ENGINE_ID")
+        or ""
+    ).strip()
+    engine_location = (
+        os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_LOCATION")
+        or os.environ.get("MEMORY_BANK_LOCATION")
+        or env.get("GOOGLE_CLOUD_AGENT_ENGINE_LOCATION")
+        or env.get("MEMORY_BANK_LOCATION")
+        or ""
+    ).strip()
+    return engine_id or None, engine_location or None
+
+
 def _print_plan(project: str, region: str) -> None:
+    engine_id, engine_location = _agent_engine_env()
     print("Cloud Run two-stage plan (no secrets printed)")
     print(f"  project:  {project}")
     print(f"  region:   {region}")
     print(f"  services: {AGENT_SERVICE}, {TELEGRAM_SERVICE}")
     print(f"  ADK app:  {ADK_APP_NAME}")
     print("  webhook:  <SERVICE_URL>/<TELEGRAM_BOT_TOKEN>")
+    if engine_id:
+        print(f"  Memory Bank engine: {engine_id}")
+        if engine_location:
+            print(f"  Memory Bank location: {engine_location}")
     print()
-    print("1. gcloud", *agent_deploy_args(project=project, region=region))
+    print(
+        "1. gcloud",
+        *agent_deploy_args(
+            project=project,
+            region=region,
+            agent_engine_id=engine_id,
+            agent_engine_location=engine_location,
+        ),
+    )
     print()
     print(
         "2. gcloud",
@@ -229,7 +259,16 @@ def _execute(project: str, region: str) -> None:
     _grant_builder_role(project)
     _grant_secret_access(project)
 
-    _run_step("tea-agent", agent_deploy_args(project=project, region=region))
+    engine_id, engine_location = _agent_engine_env()
+    _run_step(
+        "tea-agent",
+        agent_deploy_args(
+            project=project,
+            region=region,
+            agent_engine_id=engine_id,
+            agent_engine_location=engine_location,
+        ),
+    )
     agent_url = _service_url(project, region, AGENT_SERVICE)
     print(f"tea-agent URL: {agent_url}")
 

@@ -47,3 +47,5 @@ def test_env_example_has_placeholders_only() -> None:
     assert "GEMINI_API_KEY=AIza" not in text
     assert "TELEGRAM_BOT_TOKEN=" + "1" * 20 not in text
     assert "deploy_cloud_run.py --execute" in text
+    assert "setup_memory_bank.py" in text
+    assert "GOOGLE_CLOUD_AGENT_ENGINE_LOCATION=eu" in text

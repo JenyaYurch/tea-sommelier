@@ -36,14 +36,25 @@ def is_webhook_mode(*, port: str | None, service_url: str | None) -> bool:
     return bool((port or "").strip() and (service_url or "").strip())
 
 
-def agent_env_vars(*, project: str, location: str = "global") -> str:
-    return ",".join(
-        [
-            "GOOGLE_GENAI_USE_VERTEXAI=false",
-            f"GOOGLE_CLOUD_PROJECT={project}",
-            f"GOOGLE_CLOUD_LOCATION={location}",
-        ]
-    )
+def agent_env_vars(
+    *,
+    project: str,
+    location: str = "global",
+    agent_engine_id: str | None = None,
+    agent_engine_location: str | None = None,
+) -> str:
+    parts = [
+        "GOOGLE_GENAI_USE_VERTEXAI=false",
+        f"GOOGLE_CLOUD_PROJECT={project}",
+        f"GOOGLE_CLOUD_LOCATION={location}",
+    ]
+    engine_id = (agent_engine_id or "").strip()
+    if engine_id:
+        parts.append(f"GOOGLE_CLOUD_AGENT_ENGINE_ID={engine_id}")
+    engine_location = (agent_engine_location or "").strip()
+    if engine_location:
+        parts.append(f"GOOGLE_CLOUD_AGENT_ENGINE_LOCATION={engine_location}")
+    return ",".join(parts)
 
 
 def telegram_env_vars(
@@ -66,6 +77,8 @@ def agent_deploy_args(
     project: str,
     region: str = CLOUD_RUN_REGION,
     service: str = AGENT_SERVICE,
+    agent_engine_id: str | None = None,
+    agent_engine_location: str | None = None,
 ) -> list[str]:
     return [
         "run",
@@ -80,7 +93,12 @@ def agent_deploy_args(
         f"--memory={AGENT_MEMORY}",
         f"--timeout={REQUEST_TIMEOUT}",
         "--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest",
-        f"--set-env-vars={agent_env_vars(project=project)}",
+        "--set-env-vars="
+        + agent_env_vars(
+            project=project,
+            agent_engine_id=agent_engine_id,
+            agent_engine_location=agent_engine_location,
+        ),
         "--quiet",
     ]
 

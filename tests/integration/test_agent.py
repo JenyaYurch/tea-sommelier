@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from google.adk.agents.run_config import RunConfig, StreamingMode
+from google.adk.memory import InMemoryMemoryService
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
@@ -29,7 +30,12 @@ def test_agent_stream() -> None:
     session_service = InMemorySessionService()
 
     session = session_service.create_session_sync(user_id="test_user", app_name="test")
-    runner = Runner(agent=root_agent, session_service=session_service, app_name="test")
+    runner = Runner(
+        agent=root_agent,
+        session_service=session_service,
+        memory_service=InMemoryMemoryService(),
+        app_name="test",
+    )
 
     message = types.Content(
         role="user",

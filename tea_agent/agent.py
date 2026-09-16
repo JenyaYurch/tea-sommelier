@@ -18,9 +18,11 @@ import os
 from google.adk.agents import Agent
 from google.adk.apps import App
 from google.adk.models import Gemini
+from google.adk.tools.preload_memory_tool import PreloadMemoryTool
 from google.genai import types
 
 from tea_agent.brewing_agent import brewing_agent
+from tea_agent.memory import generate_memories_callback
 from tea_agent.next_steps import attach_next_steps_to_response, collect_shop_hits
 from tea_agent.onboarding_agent import onboarding_agent
 from tea_agent.profile_tools import save_taste_profile
@@ -74,6 +76,7 @@ INSTRUCTION = """
 Если спрашивают «сколько стоит / где купить» — resolve_tea → find_in_shop; не бери цену из памяти.
 Вкус/терруар — только tea.support; цена/ссылка — только find_in_shop. Не смешивай.
 После любых tool-вызовов всегда дай законченный ответ пользователю на русском. Не заканчивай ход пустым сообщением.
+Если в контексте есть факты из прошлых сессий (вкус, сосуд, нелюбимая горечь, любимые сорта) — учитывай их. Не выдумывай предпочтения, которых нет в профиле сессии или в этих фактах. Цены, терруар и заварка — только из tools, не из памяти. Медицинские диагнозы и обещания не запоминай и не используй. Если пользователь просит забыть — не опирайся на старые предпочтения в этом ответе.
 После ровно 3 рекомендаций и после витрины/подарка в конце ответа добавь блок:
 ### Что дальше
 [мягче] [дешевле] [без горечи] [подарок] [подробнее]
@@ -102,10 +105,12 @@ root_agent = Agent(
         find_in_shop,
         save_taste_profile,
         ask_sommelier,
+        PreloadMemoryTool(),
     ],
     sub_agents=[onboarding_agent, brewing_agent],
     after_tool_callback=collect_shop_hits,
     after_model_callback=attach_next_steps_to_response,
+    after_agent_callback=generate_memories_callback,
 )
 
 app = App(
