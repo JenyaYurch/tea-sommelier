@@ -25,7 +25,8 @@ from google.adk.models.llm_response import LlmResponse
 from google.adk.tools import BaseTool, ToolContext
 from google.genai import types
 
-from tea_agent.shop_catalog import load_catalog
+from tea_agent.shop_catalog import find_products, load_catalog
+from tea_agent.slug_index import fold_text, resolve_query
 
 ACTION_LABELS: tuple[str, ...] = (
     "мягче",
@@ -43,6 +44,9 @@ _MD_LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
 _BARE_URL = re.compile(r"https?://[^\s)>\]]+")
 _NUMBERED = re.compile(r"(?m)^\s*(?:\d+[.)]|[-*•])\s+\S+")
 _BUY_LABEL = re.compile(r"(?i)^купить(?:\s*[:—-]\s*|\s+)?(.*)$")
+_REC_LINE = re.compile(
+    r"(?m)^\s*(?:#{1,3}\s*)?(?:\d+[.)]\s+|[-*•]\s+)(.+)$"
+)
 _TEASHOP_HOSTS = frozenset({"teashop.by", "www.teashop.by"})
 
 
@@ -70,11 +74,21 @@ def normalize_product_url(url: str | None) -> str:
 @lru_cache(maxsize=1)
 def _catalog_url_map() -> dict[str, str]:
     mapping: dict[str, str] = {}
+    for key, item in _catalog_items().items():
+        original = str(item.get("product_url") or "").strip()
+        if key and original:
+            mapping[key] = original
+    return mapping
+
+
+@lru_cache(maxsize=1)
+def _catalog_items() -> dict[str, dict[str, Any]]:
+    mapping: dict[str, dict[str, Any]] = {}
     for item in load_catalog():
         original = str(item.get("product_url") or "").strip()
         key = normalize_product_url(original)
         if key:
-            mapping[key] = original
+            mapping[key] = item
     return mapping
 
 
@@ -169,7 +183,15 @@ def harvest_catalog_products(text: str) -> list[dict[str, Any]]:
         seen.add(canonical)
         buy = _BUY_LABEL.match(label.strip())
         name = (buy.group(1) if buy else label).strip() or label.strip()
-        products.append({"product_name": name, "product_url": canonical})
+        catalog_item = _catalog_items().get(normalize_product_url(canonical))
+        slug = str((catalog_item or {}).get("matched_slug") or "").strip()
+        products.append(
+            {
+                "product_name": name,
+                "product_url": canonical,
+                "matched_slug": slug,
+            }
+        )
     return products
 
 
@@ -212,16 +234,47 @@ def should_attach_next_steps(
     return looks_like_recommendations(text)
 
 
+def extract_recommended_names(text: str) -> list[str]:
+    """Tea names from a numbered/bulleted recommendation list, in order."""
+    body = strip_next_steps_block(text)
+    names: list[str] = []
+    seen: set[str] = set()
+    for match in _REC_LINE.finditer(body):
+        name = _clean_recommended_name(match.group(1))
+        key = fold_text(name)
+        if not name or not key or key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+        if len(names) >= 3:
+            break
+    return names
+
+
+def products_for_reply(
+    text: str, products: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    """Catalog products for the teas named in this reply (max 3, one SKU each)."""
+    pool = _merge_products(
+        _allowed_products(products or []),
+        harvest_catalog_products(strip_next_steps_block(text)),
+    )
+    names = extract_recommended_names(text)
+    if names:
+        selected = _select_products_for_names(names, pool)
+        if selected:
+            return selected
+    return _unique_products_by_slug(pool)[:3]
+
+
 def ensure_next_steps(
     text: str, products: list[dict[str, Any]] | None = None
 ) -> str:
-    allowed = _allowed_products(products or [])
-    harvested = harvest_catalog_products(strip_next_steps_block(text))
-    merged = _merge_products(allowed, harvested)
-    if not should_attach_next_steps(text, merged):
+    selected = products_for_reply(text, products)
+    if not should_attach_next_steps(text, selected):
         return text
     body = _strip_invented_shop_links(strip_next_steps_block(text))
-    return f"{body}\n\n{format_next_steps_block(merged)}"
+    return f"{body}\n\n{format_next_steps_block(selected)}"
 
 
 def extract_response_text(response: Any) -> str:
@@ -264,7 +317,9 @@ def collect_shop_hits(
         return None
     if not isinstance(tool_response, dict):
         return None
-    incoming = _allowed_products(tool_response.get("products") or [])
+    incoming = _unique_products_by_slug(
+        _allowed_products(tool_response.get("products") or [])
+    )
     if not incoming:
         return None
     existing = list(tool_context.state.get(SHOP_HITS_KEY) or [])
@@ -330,7 +385,17 @@ def _allowed_products(products: list[Any]) -> list[dict[str, Any]]:
         if not url:
             continue
         name = str(item.get("product_name") or "").strip() or "чай"
-        out.append({"product_name": name, "product_url": url})
+        slug = str(item.get("matched_slug") or "").strip()
+        if not slug:
+            catalog_item = _catalog_items().get(normalize_product_url(url))
+            slug = str((catalog_item or {}).get("matched_slug") or "").strip()
+        out.append(
+            {
+                "product_name": name,
+                "product_url": url,
+                "matched_slug": slug,
+            }
+        )
     return out
 
 
@@ -338,14 +403,126 @@ def _merge_products(
     first: list[dict[str, Any]], second: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     merged: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    seen_urls: set[str] = set()
+    seen_slugs: set[str] = set()
     for item in [*first, *second]:
         url = normalize_product_url(str(item.get("product_url") or ""))
-        if not url or url in seen:
+        if not url or url in seen_urls:
             continue
-        seen.add(url)
+        slug = str(item.get("matched_slug") or "").strip().lower()
+        if slug and slug in seen_slugs:
+            continue
+        seen_urls.add(url)
+        if slug:
+            seen_slugs.add(slug)
         merged.append(item)
     return merged
+
+
+def _unique_products_by_slug(products: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return _merge_products(products, [])
+
+
+def _clean_recommended_name(raw: str) -> str:
+    text = _MD_LINK.sub(r"\1", raw)
+    text = text.replace("**", "").replace("__", "")
+    text = re.sub(r"[*_`]+", "", text)
+    text = re.split(r"\s*[—–]\s*|\s+-\s+", text, maxsplit=1)[0]
+    text = text.split(":", 1)[0]
+    text = text.strip(" \t.,;!?»«\"'")
+    text = re.sub(r"\s+", " ", text)
+    if len(text) > 80:
+        text = text[:80].rsplit(" ", 1)[0]
+    return text
+
+
+def _select_products_for_names(
+    names: list[str], pool: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    used_urls: set[str] = set()
+    used_slugs: set[str] = set()
+    for name in names:
+        item = _product_for_recommended_name(name, pool, used_urls, used_slugs)
+        if not item:
+            continue
+        url = normalize_product_url(str(item.get("product_url") or ""))
+        slug = str(item.get("matched_slug") or "").strip().lower()
+        if url:
+            used_urls.add(url)
+        if slug:
+            used_slugs.add(slug)
+        selected.append(item)
+    return selected
+
+
+def _product_for_recommended_name(
+    name: str,
+    pool: list[dict[str, Any]],
+    used_urls: set[str],
+    used_slugs: set[str],
+) -> dict[str, Any] | None:
+    matches = resolve_query(name, limit=3)
+    slugs: list[str] = []
+    if matches and int(matches[0].get("score") or 0) >= 50:
+        slugs = [
+            str(row["slug"])
+            for row in matches
+            if int(row.get("score") or 0) >= 50
+        ]
+    for slug in slugs:
+        if slug in used_slugs:
+            continue
+        for item in pool:
+            item_slug = str(item.get("matched_slug") or "").strip().lower()
+            url = normalize_product_url(str(item.get("product_url") or ""))
+            if item_slug == slug and url and url not in used_urls:
+                return _named_product(item, name)
+        found = find_products(slug=slug, limit=1)
+        if found:
+            url = canonical_catalog_url(str(found[0].get("product_url") or ""))
+            if url and normalize_product_url(url) not in used_urls:
+                return _named_product(
+                    {
+                        "product_name": found[0].get("product_name"),
+                        "product_url": url,
+                        "matched_slug": found[0].get("matched_slug") or slug,
+                    },
+                    name,
+                )
+    needle = fold_text(name)
+    best: dict[str, Any] | None = None
+    best_score = 0
+    for item in pool:
+        url = normalize_product_url(str(item.get("product_url") or ""))
+        slug = str(item.get("matched_slug") or "").strip().lower()
+        if not url or url in used_urls or (slug and slug in used_slugs):
+            continue
+        pname = fold_text(str(item.get("product_name") or ""))
+        if not needle or not pname:
+            continue
+        score = 0
+        if needle == pname:
+            score = 95
+        elif needle in pname or pname in needle:
+            score = 75 if min(len(needle), len(pname)) >= 4 else 45
+        if score > best_score:
+            best_score = score
+            best = item
+    if best is not None and best_score >= 50:
+        return _named_product(best, name)
+    return None
+
+
+def _named_product(item: dict[str, Any], name: str) -> dict[str, Any]:
+    url = canonical_catalog_url(str(item.get("product_url") or "")) or ""
+    slug = str(item.get("matched_slug") or "").strip()
+    display = name.strip() or str(item.get("product_name") or "чай").strip() or "чай"
+    return {
+        "product_name": display,
+        "product_url": url,
+        "matched_slug": slug,
+    }
 
 
 def _strip_invented_shop_links(text: str) -> str:

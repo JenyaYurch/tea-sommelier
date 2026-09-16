@@ -13,16 +13,22 @@ from tea_agent.next_steps import (
     attach_next_steps_to_response,
     collect_shop_hits,
     ensure_next_steps,
+    extract_recommended_names,
     format_next_steps_block,
     invented_buy_urls,
     is_catalog_url,
     parse_next_steps,
+    products_for_reply,
     prompt_needs_next_steps,
     should_attach_next_steps,
 )
 
 LONGJING_URL = "https://www.teashop.by/product/longjing-1/"
+LONGJING_SKU2 = "https://www.teashop.by/product/xihu-longjing/"
+LONGJING_SKU3 = "https://www.teashop.by/product/longjingcha/"
 BILUOCHUN_URL = "https://www.teashop.by/product/duntin-bi-lo-chun/"
+ANJI_URL = "https://www.teashop.by/product/anczi-bajcha/"
+BAI_MAO_URL = "https://www.teashop.by/product/baj-mao-xou-snezhnaya-obezyana/"
 FAKE_URL = "https://www.teashop.by/product/totally-invented-tea/"
 
 
@@ -84,9 +90,93 @@ def test_ensure_next_steps_appends_and_rewrites_invented_link() -> None:
     assert FAKE_URL not in updated
     assert LONGJING_URL in updated
     assert BILUOCHUN_URL in updated
+    assert ANJI_URL in updated
     for label in ACTION_LABELS:
         assert f"[{label}]" in updated
     assert updated.count(HEADING) == 1
+
+
+def test_extract_recommended_names_from_numbered_list() -> None:
+    names = extract_recommended_names(
+        "1. **Лунцзин (Longjing)** — мягкий утренний чай.\n"
+        "2. Би Ло Чунь — без горечи.\n"
+        "3. Аньцзи Бай Ча — светлый вкус.\n"
+    )
+    assert names == ["Лунцзин (Longjing)", "Би Ло Чунь", "Аньцзи Бай Ча"]
+
+
+def test_buy_products_match_named_teas_not_neighbor_skus() -> None:
+    products = [
+        {
+            "product_name": "Лунцзин «Колодец Дракона»",
+            "product_url": LONGJING_URL,
+            "matched_slug": "xihu-longjing",
+        },
+        {
+            "product_name": "Си Ху Лун Цзин",
+            "product_url": LONGJING_SKU2,
+            "matched_slug": "xihu-longjing",
+        },
+        {
+            "product_name": "Лунцзин ча",
+            "product_url": LONGJING_SKU3,
+            "matched_slug": "xihu-longjing",
+        },
+        {
+            "product_name": "Бай Мао Хоу",
+            "product_url": BAI_MAO_URL,
+            "matched_slug": "bai-mao-hou",
+        },
+        {
+            "product_name": "Дунтин Би Ло Чунь",
+            "product_url": BILUOCHUN_URL,
+            "matched_slug": "biluochun",
+        },
+        {
+            "product_name": "Аньцзи Бай Ча",
+            "product_url": ANJI_URL,
+            "matched_slug": "anji-baicha",
+        },
+    ]
+    selected = products_for_reply(_recs_text(), products)
+    urls = [item["product_url"] for item in selected]
+    assert urls == [LONGJING_URL, BILUOCHUN_URL, ANJI_URL]
+    assert LONGJING_SKU2 not in urls
+    assert LONGJING_SKU3 not in urls
+    assert BAI_MAO_URL not in urls
+
+    updated = ensure_next_steps(_recs_text(), products)
+    buys = [step for step in parse_next_steps(updated) if step.kind == "buy"]
+    assert [step.url for step in buys] == [LONGJING_URL, BILUOCHUN_URL, ANJI_URL]
+
+
+def test_collect_shop_hits_keeps_one_sku_per_slug() -> None:
+    state: dict = {}
+    tool = SimpleNamespace(name="find_in_shop")
+    ctx = SimpleNamespace(state=state)
+    collect_shop_hits(
+        tool,  # type: ignore[arg-type]
+        {},
+        ctx,  # type: ignore[arg-type]
+        {
+            "status": "success",
+            "products": [
+                {
+                    "product_name": "Лунцзин 1",
+                    "product_url": LONGJING_URL,
+                    "matched_slug": "xihu-longjing",
+                },
+                {
+                    "product_name": "Лунцзин 2",
+                    "product_url": LONGJING_SKU2,
+                    "matched_slug": "xihu-longjing",
+                },
+            ],
+        },
+    )
+    hits = state[SHOP_HITS_KEY]
+    assert len(hits) == 1
+    assert hits[0]["product_url"] == LONGJING_URL
 
 
 def test_should_attach_on_three_recs_even_without_shop() -> None:

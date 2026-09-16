@@ -22,6 +22,7 @@ from tea_agent.next_steps import (
     NextStep,
     is_catalog_url,
     parse_next_steps,
+    products_for_reply,
     strip_next_steps_block,
 )
 from telegram_integration.split import TELEGRAM_MAX_MESSAGE_LENGTH, split_telegram_text
@@ -105,12 +106,33 @@ def prepare_telegram_reply(
 ) -> tuple[list[str], InlineKeyboardMarkup | None]:
     """Split visible text and attach a keyboard built from the next-steps block."""
     steps = parse_next_steps(text)
+    if steps:
+        steps = _align_buy_steps(text, steps)
     markup = build_next_steps_keyboard(steps)
     body = strip_next_steps_block(text) if markup is not None else text
     chunks = split_telegram_text(body, limit=limit)
     if not chunks and markup is not None:
         chunks = ["Что дальше:"]
     return chunks, markup
+
+
+def _align_buy_steps(text: str, steps: list[NextStep]) -> list[NextStep]:
+    """Keep action chips; bind Купить buttons to teas named in this reply."""
+    actions = [step for step in steps if step.kind == "action"]
+    pool = [
+        {"product_name": step.label, "product_url": step.url}
+        for step in steps
+        if step.kind == "buy" and step.url
+    ]
+    buys = [
+        NextStep(
+            "buy",
+            str(item.get("product_name") or "чай"),
+            str(item.get("product_url") or "") or None,
+        )
+        for item in products_for_reply(text, pool)
+    ]
+    return [*actions, *buys] or steps
 
 
 def _clip(text: str, limit: int = _BUTTON_TEXT_LIMIT) -> str:

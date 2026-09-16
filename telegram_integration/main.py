@@ -15,8 +15,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from telegram import Message, Update
-from telegram.constants import ChatAction
-from telegram.error import Conflict
+from telegram.constants import ChatAction, ParseMode
+from telegram.error import BadRequest, Conflict
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -32,6 +32,7 @@ from telegram_integration.deploy_spec import (
     is_webhook_mode,
     normalize_service_url,
 )
+from telegram_integration.format import markdown_to_telegram_html
 from telegram_integration.keyboard import (
     CALLBACK_PATTERN,
     parse_action_callback,
@@ -174,6 +175,20 @@ async def _deliver_reply(target: Message, text: str) -> None:
     last = len(chunks) - 1
     for index, chunk in enumerate(chunks):
         keyboard = markup if index == last else None
+        await _reply_formatted(target, chunk, keyboard)
+
+
+async def _reply_formatted(target: Message, chunk: str, keyboard) -> None:
+    html_text = markdown_to_telegram_html(chunk)
+    try:
+        await target.reply_text(
+            html_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
+        )
+    except BadRequest:
+        logger.warning("Telegram rejected HTML formatting; sending plain text")
         await target.reply_text(chunk, reply_markup=keyboard)
 
 

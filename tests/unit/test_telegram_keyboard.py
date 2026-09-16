@@ -5,7 +5,9 @@ from tea_agent.next_steps import (
     ACTION_LABELS,
     HEADING,
     format_next_steps_block,
+    normalize_product_url,
 )
+from tea_agent.shop_catalog import load_catalog
 from telegram_integration.keyboard import (
     CALLBACK_PREFIX,
     action_callback_data,
@@ -17,7 +19,9 @@ from telegram_integration.keyboard import (
 )
 
 LONGJING_URL = "https://www.teashop.by/product/longjing-1/"
+LONGJING_SKU2 = "https://www.teashop.by/product/xihu-longjing/"
 BILUOCHUN_URL = "https://www.teashop.by/product/duntin-bi-lo-chun/"
+ANJI_URL = "https://www.teashop.by/product/anczi-bajcha/"
 FAKE_URL = "https://www.teashop.by/product/totally-invented-tea/"
 
 
@@ -34,6 +38,14 @@ def _recs_with_block() -> str:
         ]
     )
     return f"{recs}\n\n{block}"
+
+
+def _catalog_slug(url: str) -> str:
+    key = normalize_product_url(url)
+    for item in load_catalog():
+        if normalize_product_url(str(item.get("product_url") or "")) == key:
+            return str(item.get("matched_slug") or "")
+    return ""
 
 
 def _buttons(markup) -> list[dict]:
@@ -69,30 +81,57 @@ def test_buy_buttons_open_catalog_urls_not_callback() -> None:
     buys = [button for button in buttons if "url" in button]
     for label in ACTION_LABELS:
         assert actions[label]["callback_data"] == f"{CALLBACK_PREFIX}{label}"
-    urls = {button["url"] for button in buys}
-    assert LONGJING_URL in urls
-    assert BILUOCHUN_URL in urls
-    assert FAKE_URL not in urls
+    urls = [button["url"] for button in buys]
+    assert urls == [LONGJING_URL, BILUOCHUN_URL, ANJI_URL]
     assert all(button["url"].startswith("https://") for button in buys)
     assert not any("callback_data" in button for button in buys)
 
 
-def test_buy_without_catalog_url_is_callback() -> None:
+def test_buy_buttons_follow_named_teas_not_extra_skus() -> None:
+    recs = (
+        "1. Лунцзин — мягкий утренний чай.\n"
+        "2. Би Ло Чунь — без горечи.\n"
+        "3. Аньцзи Бай Ча — светлый вкус."
+    )
+    block = format_next_steps_block(
+        [
+            {"product_name": "Си Ху Лун Цзин", "product_url": LONGJING_URL},
+            {"product_name": "Си Ху Лун Цзин ещё", "product_url": LONGJING_SKU2},
+            {"product_name": "Дунтин Би Ло Чунь", "product_url": BILUOCHUN_URL},
+        ]
+    )
+    _, markup = prepare_telegram_reply(f"{recs}\n\n{block}")
+    assert markup is not None
+    urls = [button["url"] for button in _buttons(markup) if "url" in button]
+    assert urls == [LONGJING_URL, BILUOCHUN_URL, ANJI_URL]
+    assert LONGJING_SKU2 not in urls
+
+
+def test_named_recs_without_buy_urls_still_get_catalog_buttons() -> None:
     text = (
-        "1. Лунцзин\n2. Би Ло Чунь\n3. Аньцзи\n\n"
+        "1. Лунцзин\n2. Би Ло Чунь\n3. Аньцзи Бай Ча\n\n"
         f"{HEADING}\n[мягче] [дешевле] [без горечи] [подарок] [подробнее]\n[купить]"
     )
     _, markup = prepare_telegram_reply(text)
     assert markup is not None
     buttons = _buttons(markup)
-    assert not any("url" in button for button in buttons)
-    buy = next(button for button in buttons if button["text"] == "купить")
-    assert parse_action_callback(buy["callback_data"]) == "купить"
+    buys = [button for button in buttons if "url" in button]
+    urls = [button["url"] for button in buys]
+    labels = [button["text"] for button in buys]
+    assert len(urls) == 3
+    assert [_catalog_slug(url) for url in urls] == [
+        "xihu-longjing",
+        "biluochun",
+        "anji-baicha",
+    ]
+    assert "Лунцзин" in labels[0]
+    assert "Би Ло Чунь" in labels[1]
+    assert "Аньцзи" in labels[2]
 
 
-def test_invented_buy_url_is_not_a_url_button() -> None:
+def test_invented_buy_url_without_named_recs_is_not_a_url_button() -> None:
     text = (
-        "1. Лунцзин\n2. Би Ло Чунь\n3. Аньцзи\n\n"
+        "Какой чай вам нравится?\n\n"
         f"{HEADING}\n[мягче] [дешевле] [без горечи] [подарок] [подробнее]\n"
         f"[Купить: фейк]({FAKE_URL})"
     )
@@ -100,7 +139,6 @@ def test_invented_buy_url_is_not_a_url_button() -> None:
     assert markup is not None
     buttons = _buttons(markup)
     assert FAKE_URL not in {button.get("url") for button in buttons}
-    # No catalog URL → fallback callback «купить», never open an invented shop page.
     buy = next(button for button in buttons if button.get("text") == "купить")
     assert "url" not in buy
     assert parse_action_callback(buy["callback_data"]) == "купить"
