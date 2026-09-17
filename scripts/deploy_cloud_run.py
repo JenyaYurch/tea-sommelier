@@ -49,6 +49,8 @@ REQUIRED_APIS = (
 SECRETS = ("GOOGLE_API_KEY", "TELEGRAM_BOT_TOKEN")
 CLOUD_SQL_CLIENT_ROLE = "roles/cloudsql.client"
 BUILDER_ROLE = "roles/run.builder"
+IAM_SETTLE_SEC = 30
+VERIFY_ATTEMPTS = 5
 
 
 def _gcloud_bin() -> str:
@@ -222,8 +224,12 @@ def _print_plan(project: str, region: str) -> None:
         ),
     )
     print()
+    print("2. verify_session_persistence.py --write against tea-agent URL")
+    print("3. gcloud", *agent_restart_args(project=project, region=region, probe="<ts>"))
+    print("4. verify_session_persistence.py --check after the new revision")
+    print()
     print(
-        "2. gcloud",
+        "5. gcloud",
         *telegram_deploy_args(
             project=project,
             region=region,
@@ -233,7 +239,7 @@ def _print_plan(project: str, region: str) -> None:
     )
     print()
     print(
-        "3. gcloud",
+        "6. gcloud",
         *telegram_update_env_args(
             project=project,
             region=region,
@@ -241,10 +247,6 @@ def _print_plan(project: str, region: str) -> None:
             service_url="https://<telegram-integration-url>",
         ),
     )
-    print()
-    print("4. verify_session_persistence.py --write against tea-agent URL")
-    print("5. gcloud", *agent_restart_args(project=project, region=region, probe="<ts>"))
-    print("6. verify_session_persistence.py --check after the new revision")
     print()
     print("Dry-run only. Pass --execute after explicit approval to deploy.")
 
@@ -332,6 +334,12 @@ def _grant_cloudsql_client(project: str) -> None:
     print(f"Granted {CLOUD_SQL_CLIENT_ROLE} to compute default SA")
 
 
+def _wait_for_iam() -> None:
+    """IAM bindings are eventually consistent; the Cloud SQL proxy needs cloudsql.client."""
+    print(f"Waiting {IAM_SETTLE_SEC}s for IAM to propagate")
+    time.sleep(IAM_SETTLE_SEC)
+
+
 def _run_step(label: str, args: list[str]) -> subprocess.CompletedProcess[str]:
     print(f"{label}: gcloud {' '.join(args)}")
     proc = _gcloud(args)
@@ -363,23 +371,31 @@ def _service_url(project: str, region: str, service: str) -> str:
 
 
 def _verify_cli(agent_url: str, *flags: str) -> None:
-    proc = subprocess.run(
-        [
-            sys.executable,
-            str(ROOT / "scripts" / "verify_session_persistence.py"),
-            "--base-url",
-            agent_url,
-            *flags,
-        ],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if proc.stdout.strip():
-        print(proc.stdout.strip())
-    if proc.returncode != 0:
-        _fail("Session persistence verify failed", proc)
+    last: subprocess.CompletedProcess[str] | None = None
+    for attempt in range(1, VERIFY_ATTEMPTS + 1):
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "verify_session_persistence.py"),
+                "--base-url",
+                agent_url,
+                *flags,
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if proc.stdout.strip():
+            print(proc.stdout.strip())
+        if proc.returncode == 0:
+            return
+        last = proc
+        print(
+            f"Session persistence {flags} attempt {attempt}/{VERIFY_ATTEMPTS} failed; retrying"
+        )
+        time.sleep(2 * attempt)
+    _fail("Session persistence verify failed", last)
 
 
 def _verify_after_deploy(project: str, region: str, agent_url: str) -> None:
@@ -412,6 +428,7 @@ def _execute(project: str, region: str, *, skip_verify: bool = False) -> None:
     _grant_secret_access(project, extra_secrets)
     if cloud_sql:
         _grant_cloudsql_client(project)
+        _wait_for_iam()
 
     _run_step(
         "tea-agent",
@@ -427,6 +444,12 @@ def _execute(project: str, region: str, *, skip_verify: bool = False) -> None:
     )
     agent_url = _service_url(project, region, AGENT_SERVICE)
     print(f"tea-agent URL: {agent_url}")
+    if skip_verify:
+        print("Skipping TEA-14 session verify (--skip-verify).")
+    else:
+        # Prove Cloud SQL/Agent Engine before Telegram deploy, so a missing
+        # TELEGRAM_BOT_TOKEN cannot skip the restart check.
+        _verify_after_deploy(project, region, agent_url)
 
     _run_step(
         "telegram-integration stage 1 (placeholder SERVICE_URL)",
@@ -451,10 +474,6 @@ def _execute(project: str, region: str, *, skip_verify: bool = False) -> None:
     )
     print("Deploy finished. Webhook path is <SERVICE_URL>/<TELEGRAM_BOT_TOKEN>.")
     print("Send /start in Telegram. Do not run local polling at the same time.")
-    if skip_verify:
-        print("Skipping TEA-14 session verify (--skip-verify).")
-        return
-    _verify_after_deploy(project, region, agent_url)
 
 
 def main() -> None:

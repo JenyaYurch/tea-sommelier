@@ -36,7 +36,7 @@ def postgres_unix_uri(
     instance_connection_name: str,
     socket_dir: str | None = None,
 ) -> str:
-    """Unix-socket URI for Cloud Run ``--add-cloudsql-instances``.
+    """Unix-socket URI for Cloud Run ``--set-cloudsql-instances``.
 
     ``postgresql+asyncpg://user:pass@/db?host=/cloudsql/PROJECT:REGION:INSTANCE``
     """

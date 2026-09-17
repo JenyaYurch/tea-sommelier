@@ -2,7 +2,7 @@
 
 Does not create anything unless you pass --execute (explicit approval).
 Cloud Run stays in europe-central2; the instance is created in the same region
-so the unix socket from ``--add-cloudsql-instances`` works.
+so the unix socket from ``--set-cloudsql-instances`` works.
 
 Usage:
     uv run python scripts/setup_cloud_sql.py

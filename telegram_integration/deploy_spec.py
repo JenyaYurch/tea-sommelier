@@ -139,7 +139,7 @@ def agent_deploy_args(
         ),
     ]
     if instance:
-        args.append(f"--add-cloudsql-instances={instance}")
+        args.append(f"--set-cloudsql-instances={instance}")
     args.append("--quiet")
     return args
 
