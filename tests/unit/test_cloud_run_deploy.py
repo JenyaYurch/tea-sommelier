@@ -72,6 +72,8 @@ def test_agent_deploy_uses_secret_manager_not_plaintext_key() -> None:
     assert "AIza" not in joined
     assert "--allow-unauthenticated" in args
     assert "--execution-environment=gen2" in args
+    assert "--cpu-boost" in args
+    assert "--max-instances=3" in args
     assert "GOOGLE_CLOUD_AGENT_ENGINE_ID=" not in joined
     assert "--add-cloudsql-instances" not in joined
     assert "--set-cloudsql-instances" not in joined
@@ -458,6 +460,44 @@ def test_deploy_tea_agent_retries_authenticated_when_allusers_denied(
     assert "--allow-unauthenticated" not in calls[1]
 
 
+def test_deploy_tea_agent_retries_after_cloudsql_startup_failure(monkeypatch) -> None:
+    mod = _load_deploy_module()
+    calls: list[list[str]] = []
+    waited = {"n": 0}
+
+    class Proc:
+        def __init__(self, code: int, stderr: str = "") -> None:
+            self.returncode = code
+            self.stdout = ""
+            self.stderr = stderr
+
+    def fake_gcloud(args: list[str]) -> Proc:
+        calls.append(args)
+        if len(calls) == 1:
+            return Proc(
+                1,
+                "The user-provided container failed to start and listen on "
+                "PORT=8080. Cloud SQL connection refused.",
+            )
+        return Proc(0)
+
+    monkeypatch.setattr(mod, "_gcloud", fake_gcloud)
+    monkeypatch.setattr(mod, "_wait_for_iam", lambda: waited.__setitem__("n", 1))
+    mod._deploy_tea_agent(
+        "demo-proj",
+        "europe-central2",
+        engine_id=None,
+        engine_location=None,
+        cloud_sql="demo-proj:europe-central2:tea-sessions",
+        session_user="postgres",
+        session_db="tea_sessions",
+    )
+    assert len(calls) == 2
+    assert waited["n"] == 1
+    assert "--allow-unauthenticated" in calls[0]
+    assert "--allow-unauthenticated" in calls[1]
+
+
 def test_grant_run_invoker_binds_compute_sa_and_deployer(monkeypatch) -> None:
     mod = _load_deploy_module()
     members: list[str] = []
@@ -495,7 +535,7 @@ def test_deploy_tea_agent_does_not_retry_unrelated_failure(monkeypatch) -> None:
     class Proc:
         returncode = 1
         stdout = ""
-        stderr = "Cloud SQL instance is not READY"
+        stderr = "ERROR: (gcloud.run.deploy) Missing required source."
 
     monkeypatch.setattr(
         mod, "_gcloud", lambda args: calls.append(args) or Proc()

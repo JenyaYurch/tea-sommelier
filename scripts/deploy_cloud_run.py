@@ -50,7 +50,7 @@ SECRETS = ("GOOGLE_API_KEY", "TELEGRAM_BOT_TOKEN")
 CLOUD_SQL_CLIENT_ROLE = "roles/cloudsql.client"
 BUILDER_ROLE = "roles/run.builder"
 RUN_INVOKER_ROLE = "roles/run.invoker"
-IAM_SETTLE_SEC = 30
+IAM_SETTLE_SEC = 60
 VERIFY_ATTEMPTS = 5
 UNAUTHENTICATED_DENIED_MARKERS = (
     "allusers",
@@ -59,6 +59,16 @@ UNAUTHENTICATED_DENIED_MARKERS = (
     "permitted customer",
     "unauthenticated invocations",
     "domain restriction",
+)
+RETRYABLE_AGENT_DEPLOY_MARKERS = (
+    "the user-provided container failed to start",
+    "failed to start and listen",
+    "cloudsql",
+    "cloud sql",
+    "connection refused",
+    "failed to inspect database",
+    "session store",
+    "revision is not ready",
 )
 
 
@@ -365,6 +375,12 @@ def _is_unauthenticated_denied(proc: subprocess.CompletedProcess[str]) -> bool:
     return any(marker in text for marker in UNAUTHENTICATED_DENIED_MARKERS)
 
 
+def _is_retryable_agent_deploy(proc: subprocess.CompletedProcess[str]) -> bool:
+    """True when the revision died because Cloud SQL / IAM was not ready yet."""
+    text = f"{proc.stdout or ''}\n{proc.stderr or ''}".lower()
+    return any(marker in text for marker in RETRYABLE_AGENT_DEPLOY_MARKERS)
+
+
 def _active_gcloud_account() -> str:
     proc = _gcloud(["config", "get-value", "account"])
     if proc.returncode != 0:
@@ -438,22 +454,38 @@ def _deploy_tea_agent(
         "session_db_user": session_user,
         "session_db_name": session_db,
     }
-    public_args = agent_deploy_args(**kwargs, allow_unauthenticated=True)
-    print(f"tea-agent: gcloud {' '.join(public_args)}")
-    proc = _gcloud(public_args)
+    allow_unauthenticated = True
+    args = agent_deploy_args(**kwargs, allow_unauthenticated=True)
+    print(f"tea-agent: gcloud {' '.join(args)}")
+    proc = _gcloud(args)
     if proc.returncode == 0:
         if proc.stdout.strip():
             print(proc.stdout.strip())
         return
-    if not _is_unauthenticated_denied(proc):
-        _fail("tea-agent failed", proc)
-    print("Organization policy denied allUsers on tea-agent; retrying authenticated")
-    if proc.stderr:
-        print(proc.stderr.strip())
-    _run_step(
-        "tea-agent (authenticated)",
-        agent_deploy_args(**kwargs, allow_unauthenticated=False),
-    )
+    if _is_unauthenticated_denied(proc):
+        print("Organization policy denied allUsers on tea-agent; retrying authenticated")
+        if proc.stderr:
+            print(proc.stderr.strip())
+        allow_unauthenticated = False
+        args = agent_deploy_args(**kwargs, allow_unauthenticated=False)
+        proc = _gcloud(args)
+        if proc.returncode == 0:
+            if proc.stdout.strip():
+                print(proc.stdout.strip())
+            return
+    if _is_retryable_agent_deploy(proc):
+        print("tea-agent revision failed to start; waiting for IAM/Cloud SQL then retrying")
+        if proc.stderr:
+            print(proc.stderr.strip())
+        _wait_for_iam()
+        _run_step(
+            "tea-agent (retry)",
+            agent_deploy_args(
+                **kwargs, allow_unauthenticated=allow_unauthenticated
+            ),
+        )
+        return
+    _fail("tea-agent failed", proc)
 
 
 def _service_url(project: str, region: str, service: str) -> str:

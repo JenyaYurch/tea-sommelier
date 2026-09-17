@@ -17,6 +17,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from telegram_integration.deploy_spec import (
@@ -203,6 +204,59 @@ def _user_exists(project: str, instance: str, user: str) -> bool:
     return user in names
 
 
+def _instance_state(project: str, instance: str) -> str:
+    proc = _gcloud(
+        [
+            "sql",
+            "instances",
+            "describe",
+            instance,
+            f"--project={project}",
+            "--format=value(state)",
+        ]
+    )
+    if proc.returncode != 0:
+        return ""
+    return (proc.stdout or "").strip()
+
+
+def _wait_instance_runnable(project: str, instance: str) -> None:
+    for attempt in range(1, 31):
+        state = _instance_state(project, instance)
+        if state == "RUNNABLE":
+            print(f"Cloud SQL {instance} is RUNNABLE")
+            return
+        print(
+            f"Waiting for Cloud SQL {instance} ({state or 'unknown'}) "
+            f"{attempt}/30"
+        )
+        time.sleep(10)
+    _fail(f"Cloud SQL {instance} is not RUNNABLE")
+
+
+def _ensure_instance_runnable(project: str, instance: str) -> None:
+    """Start a stopped instance and wait until DatabaseSessionService can connect."""
+    state = _instance_state(project, instance)
+    if state == "RUNNABLE":
+        return
+    if state in {"STOPPED", "SUSPENDED"}:
+        print(f"Starting Cloud SQL {instance} ({state})")
+        proc = _gcloud(
+            [
+                "sql",
+                "instances",
+                "patch",
+                instance,
+                "--activation-policy=ALWAYS",
+                f"--project={project}",
+                "--quiet",
+            ]
+        )
+        if proc.returncode != 0:
+            _fail(f"Failed to start Cloud SQL {instance}", proc)
+    _wait_instance_runnable(project, instance)
+
+
 def _execute(
     project: str,
     region: str,
@@ -248,8 +302,10 @@ def _execute(
         # postgres owns public schema on POSTGRES_17; Cloud Run must use this
         # password or GRANT CREATE, otherwise prepare_tables cannot create tables.
         _upsert_secret(project, SECRET_NAME, password)
+        _ensure_instance_runnable(project, instance)
     else:
         print(f"Reusing existing instance {instance}")
+        _ensure_instance_runnable(project, instance)
 
     if not _database_exists(project, instance, database):
         proc = _gcloud(

@@ -181,7 +181,7 @@ def test_cloud_run_env_postgres_profile_survives_process_restart(server_port: in
             "K_SERVICE": "tea-agent",
             "CLOUD_SQL_INSTANCE": CLOUD_SQL_LIKE_INSTANCE,
             "CLOUD_SQL_SOCKET_DIR": str(CLOUD_SQL_LIKE_ROOT),
-            "SESSION_DB_USER": "tea_agent",
+            "SESSION_DB_USER": "postgres",
             "SESSION_DB_NAME": "tea_sessions",
             "SESSION_DB_PASSWORD": "tea_test_pass",
         },
@@ -221,7 +221,7 @@ def test_verify_script_survives_cloud_run_shaped_restart(server_port: int) -> No
         "K_SERVICE": "tea-agent",
         "CLOUD_SQL_INSTANCE": CLOUD_SQL_LIKE_INSTANCE,
         "CLOUD_SQL_SOCKET_DIR": str(CLOUD_SQL_LIKE_ROOT),
-        "SESSION_DB_USER": "tea_agent",
+        "SESSION_DB_USER": "postgres",
         "SESSION_DB_NAME": "tea_sessions",
         "SESSION_DB_PASSWORD": "tea_test_pass",
     }

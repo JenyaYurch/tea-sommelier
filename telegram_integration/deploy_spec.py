@@ -20,6 +20,7 @@ TELEGRAM_ARGS = "run,python,-m,telegram_integration"
 AGENT_MEMORY = "1Gi"
 TELEGRAM_MEMORY = "512Mi"
 REQUEST_TIMEOUT = "300"
+AGENT_MAX_INSTANCES = "3"
 DEFAULT_SESSION_DB_USER = "postgres"
 DEFAULT_SESSION_DB_NAME = "tea_sessions"
 CLOUD_SQL_INSTANCE_NAME = "tea-sessions"
@@ -131,6 +132,8 @@ def agent_deploy_args(
         [
             "--port=8080",
             "--execution-environment=gen2",
+            "--cpu-boost",
+            f"--max-instances={AGENT_MAX_INSTANCES}",
             f"--memory={AGENT_MEMORY}",
             f"--timeout={REQUEST_TIMEOUT}",
             "--set-secrets=" + agent_secret_bindings(cloud_sql_instance=instance),
