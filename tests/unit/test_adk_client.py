@@ -68,6 +68,37 @@ async def test_ask_creates_session_then_runs() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ask_reuses_existing_session_and_does_not_recreate() -> None:
+    """Webhook restart path: GET 200 must not POST an empty session and wipe state."""
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "tg-sess-1",
+                    "userId": "tg-1",
+                    "state": {"user:experience": "новичок"},
+                },
+            )
+        assert request.url.path.endswith("/run")
+        return httpx.Response(
+            200,
+            json=[{"content": {"parts": [{"text": "снова мягкий"}]}}],
+        )
+
+    reply = await _client(handler).ask("tg-1", "tg-sess-1", "ещё")
+    assert reply == "снова мягкий"
+    assert calls[0] == ("GET", "/apps/tea_agent/users/tg-1/sessions/tg-sess-1")
+    assert not any(
+        method == "POST" and path.endswith("/sessions/tg-sess-1")
+        for method, path in calls
+    )
+
+
+@pytest.mark.asyncio
 async def test_ask_quota_raises() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "GET":

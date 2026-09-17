@@ -6,6 +6,8 @@ import os
 
 import pytest
 
+from sqlalchemy.engine import make_url
+
 from tea_agent.app_utils.session_uri import (
     CLOUD_RUN_SERVICE_ENV,
     LOCAL_SQLITE_URI,
@@ -28,6 +30,13 @@ def test_postgres_unix_uri_uses_cloudsql_socket_and_quotes_password() -> None:
     assert "@/tea_sessions?host=/cloudsql/demo-proj:europe-central2:tea-sessions" in uri
     assert "p@ss/word:1" not in uri
     assert "p%40ss%2Fword%3A1" in uri
+    parsed = make_url(uri)
+    assert parsed.drivername == "postgresql+asyncpg"
+    assert parsed.username == "tea_agent"
+    assert parsed.password == "p@ss/word:1"
+    assert parsed.database == "tea_sessions"
+    assert parsed.host is None
+    assert parsed.query["host"] == "/cloudsql/demo-proj:europe-central2:tea-sessions"
 
 
 def test_resolve_prefers_explicit_session_service_uri(monkeypatch) -> None:
