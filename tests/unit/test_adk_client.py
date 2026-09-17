@@ -9,6 +9,7 @@ from telegram_integration.adk_client import (
     AdkClientError,
     AdkHttpClient,
     AdkQuotaError,
+    cloud_run_identity_token,
     extract_reply_text,
     normalize_adk_base_url,
 )
@@ -17,6 +18,11 @@ from telegram_integration.adk_client import (
 def test_normalize_strips_run_suffix() -> None:
     assert normalize_adk_base_url("https://agent.run.app/run") == "https://agent.run.app"
     assert normalize_adk_base_url("https://agent.run.app/") == "https://agent.run.app"
+
+
+def test_cloud_run_identity_token_uses_env(monkeypatch) -> None:
+    monkeypatch.setenv("CLOUD_RUN_ID_TOKEN", "env-token")
+    assert cloud_run_identity_token("https://tea-agent.example") == "env-token"
 
 
 def test_extract_reply_joins_non_user_text() -> None:
@@ -118,3 +124,48 @@ async def test_ask_server_error() -> None:
 
     with pytest.raises(AdkClientError):
         await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+
+
+@pytest.mark.asyncio
+async def test_ask_retries_get_401_with_identity_token(monkeypatch) -> None:
+    """Private tea-agent: first GET 401, retry with Cloud Run identity token."""
+    auths: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        auths.append(request.headers.get("Authorization"))
+        if request.method == "GET" and request.headers.get("Authorization") is None:
+            return httpx.Response(401, text="Unauthorized")
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": "tg-sess-1"})
+        assert request.headers.get("Authorization") == "Bearer id-token"
+        return httpx.Response(
+            200,
+            json=[{"content": {"parts": [{"text": "живой профиль"}]}}],
+        )
+
+    monkeypatch.setattr(
+        "telegram_integration.adk_client.cloud_run_identity_token",
+        lambda _audience: "id-token",
+    )
+    reply = await _client(handler).ask("tg-1", "tg-sess-1", "ещё")
+    assert reply == "живой профиль"
+    assert auths[0] is None
+    assert auths[1] == "Bearer id-token"
+    assert auths[2] == "Bearer id-token"
+
+
+@pytest.mark.asyncio
+async def test_ask_401_without_token_does_not_retry(monkeypatch) -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(401, text="Unauthorized")
+
+    monkeypatch.setattr(
+        "telegram_integration.adk_client.cloud_run_identity_token",
+        lambda _audience: "",
+    )
+    with pytest.raises(AdkClientError, match="session check failed: 401"):
+        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+    assert calls["n"] == 1

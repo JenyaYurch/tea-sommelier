@@ -5,6 +5,7 @@ Used by Telegram webhook mode. Local polling still runs the agent in-process.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import httpx
@@ -60,6 +61,26 @@ def _raise_for_quota(status_code: int, body: str) -> None:
         raise AdkQuotaError(f"ADK quota exhausted ({status_code})")
 
 
+def cloud_run_identity_token(audience: str) -> str:
+    """Identity token for a private tea-agent. Never logged."""
+    token = (os.environ.get("CLOUD_RUN_ID_TOKEN") or "").strip()
+    if token:
+        return token
+    try:
+        response = httpx.get(
+            "http://metadata.google.internal/computeMetadata/v1/"
+            "instance/service-accounts/default/identity",
+            params={"audience": audience},
+            headers={"Metadata-Flavor": "Google"},
+            timeout=2.0,
+        )
+    except httpx.HTTPError:
+        return ""
+    if response.status_code != 200:
+        return ""
+    return response.text.strip()
+
+
 class AdkHttpClient:
     """Create/reuse an ADK session and POST /run."""
 
@@ -75,6 +96,36 @@ class AdkHttpClient:
         self.app_name = app_name
         self.timeout = timeout
         self._transport = transport
+        self._iam_headers: dict[str, str] | None = None
+
+    def _auth_headers(self) -> dict[str, str]:
+        if self._iam_headers is None:
+            token = cloud_run_identity_token(self.base_url)
+            self._iam_headers = (
+                {"Authorization": f"Bearer {token}"} if token else {}
+            )
+        return self._iam_headers
+
+    async def _request(
+        self,
+        client: httpx.AsyncClient,
+        method: str,
+        url: str,
+        **kwargs,
+    ) -> httpx.Response:
+        headers = dict(kwargs.get("headers") or {})
+        if self._iam_headers:
+            headers.update(self._iam_headers)
+        request_kwargs = {**kwargs, "headers": headers} if headers else kwargs
+        response = await client.request(method, url, **request_kwargs)
+        if response.status_code not in {401, 403}:
+            return response
+        auth = self._auth_headers()
+        token = auth.get("Authorization")
+        if not token or headers.get("Authorization") == token:
+            return response
+        headers = {**headers, **auth}
+        return await client.request(method, url, **{**kwargs, "headers": headers})
 
     def _session_url(self, user_id: str, session_id: str) -> str:
         return (
@@ -85,7 +136,7 @@ class AdkHttpClient:
         self, client: httpx.AsyncClient, user_id: str, session_id: str
     ) -> None:
         url = self._session_url(user_id, session_id)
-        check = await client.get(url, timeout=SESSION_TIMEOUT_SEC)
+        check = await self._request(client, "GET", url, timeout=SESSION_TIMEOUT_SEC)
         if check.status_code == 200:
             return
         if check.status_code not in {404, 422}:
@@ -93,7 +144,9 @@ class AdkHttpClient:
             raise AdkClientError(
                 f"session check failed: {check.status_code} {check.text[:200]}"
             )
-        created = await client.post(url, json={}, timeout=SESSION_TIMEOUT_SEC)
+        created = await self._request(
+            client, "POST", url, json={}, timeout=SESSION_TIMEOUT_SEC
+        )
         if created.status_code not in {200, 201}:
             _raise_for_quota(created.status_code, created.text)
             raise AdkClientError(
@@ -103,7 +156,9 @@ class AdkHttpClient:
     async def ask(self, user_id: str, session_id: str, text: str) -> str:
         async with httpx.AsyncClient(transport=self._transport) as client:
             await self.ensure_session(client, user_id, session_id)
-            response = await client.post(
+            response = await self._request(
+                client,
+                "POST",
                 f"{self.base_url}/run",
                 json={
                     "appName": self.app_name,

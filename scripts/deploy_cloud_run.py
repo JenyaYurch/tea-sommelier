@@ -49,8 +49,17 @@ REQUIRED_APIS = (
 SECRETS = ("GOOGLE_API_KEY", "TELEGRAM_BOT_TOKEN")
 CLOUD_SQL_CLIENT_ROLE = "roles/cloudsql.client"
 BUILDER_ROLE = "roles/run.builder"
+RUN_INVOKER_ROLE = "roles/run.invoker"
 IAM_SETTLE_SEC = 30
 VERIFY_ATTEMPTS = 5
+UNAUTHENTICATED_DENIED_MARKERS = (
+    "allusers",
+    "allow-unauthenticated",
+    "allowedpolicymemberdomains",
+    "permitted customer",
+    "unauthenticated invocations",
+    "domain restriction",
+)
 
 
 def _gcloud_bin() -> str:
@@ -350,6 +359,103 @@ def _run_step(label: str, args: list[str]) -> subprocess.CompletedProcess[str]:
     return proc
 
 
+def _is_unauthenticated_denied(proc: subprocess.CompletedProcess[str]) -> bool:
+    """True when org policy / IAM forbids binding allUsers as run.invoker."""
+    text = f"{proc.stdout or ''}\n{proc.stderr or ''}".lower()
+    return any(marker in text for marker in UNAUTHENTICATED_DENIED_MARKERS)
+
+
+def _active_gcloud_account() -> str:
+    proc = _gcloud(["config", "get-value", "account"])
+    if proc.returncode != 0:
+        return ""
+    return (proc.stdout or "").strip()
+
+
+def _member_for_account(account: str) -> str:
+    value = (account or "").strip()
+    if not value or value in {"(unset)", "none"}:
+        return ""
+    if value.startswith("user:") or value.startswith("serviceAccount:"):
+        return value
+    if value.endswith(".gserviceaccount.com"):
+        return f"serviceAccount:{value}"
+    return f"user:{value}"
+
+
+def _invoker_members(project: str) -> list[str]:
+    members: list[str] = []
+    seen: set[str] = set()
+    for member in (
+        f"serviceAccount:{_compute_sa(project)}",
+        _member_for_account(_active_gcloud_account()),
+    ):
+        if not member or member in seen:
+            continue
+        seen.add(member)
+        members.append(member)
+    return members
+
+
+def _grant_run_invoker(project: str, region: str, service: str) -> None:
+    """telegram-integration and --check need run.invoker when allUsers is denied."""
+    for member in _invoker_members(project):
+        proc = _gcloud(
+            [
+                "run",
+                "services",
+                "add-iam-policy-binding",
+                service,
+                f"--project={project}",
+                f"--region={region}",
+                f"--member={member}",
+                f"--role={RUN_INVOKER_ROLE}",
+                "--quiet",
+            ]
+        )
+        if proc.returncode != 0:
+            _fail(f"Failed to grant {RUN_INVOKER_ROLE} to {member} on {service}", proc)
+        print(f"Granted {RUN_INVOKER_ROLE} to {member} on {service}")
+
+
+def _deploy_tea_agent(
+    project: str,
+    region: str,
+    *,
+    engine_id: str | None,
+    engine_location: str | None,
+    cloud_sql: str | None,
+    session_user: str,
+    session_db: str,
+) -> None:
+    """Public first; retry authenticated if the org policy rejects allUsers."""
+    kwargs = {
+        "project": project,
+        "region": region,
+        "agent_engine_id": engine_id,
+        "agent_engine_location": engine_location,
+        "cloud_sql_instance": cloud_sql,
+        "session_db_user": session_user,
+        "session_db_name": session_db,
+    }
+    public_args = agent_deploy_args(**kwargs, allow_unauthenticated=True)
+    print(f"tea-agent: gcloud {' '.join(public_args)}")
+    proc = _gcloud(public_args)
+    if proc.returncode == 0:
+        if proc.stdout.strip():
+            print(proc.stdout.strip())
+        return
+    if not _is_unauthenticated_denied(proc):
+        _fail("tea-agent failed", proc)
+    print("Organization policy denied allUsers on tea-agent; retrying authenticated")
+    if proc.stderr:
+        print(proc.stderr.strip())
+    _run_step(
+        "tea-agent (authenticated)",
+        agent_deploy_args(**kwargs, allow_unauthenticated=False),
+    )
+
+
 def _service_url(project: str, region: str, service: str) -> str:
     proc = _gcloud(
         [
@@ -445,18 +551,16 @@ def _execute(project: str, region: str, *, skip_verify: bool = False) -> None:
         _grant_cloudsql_client(project)
         _wait_for_iam()
 
-    _run_step(
-        "tea-agent",
-        agent_deploy_args(
-            project=project,
-            region=region,
-            agent_engine_id=engine_id,
-            agent_engine_location=engine_location,
-            cloud_sql_instance=cloud_sql,
-            session_db_user=session_user,
-            session_db_name=session_db,
-        ),
+    _deploy_tea_agent(
+        project,
+        region,
+        engine_id=engine_id,
+        engine_location=engine_location,
+        cloud_sql=cloud_sql,
+        session_user=session_user,
+        session_db=session_db,
     )
+    _grant_run_invoker(project, region, AGENT_SERVICE)
     agent_url = _service_url(project, region, AGENT_SERVICE)
     print(f"tea-agent URL: {agent_url}")
     if skip_verify:

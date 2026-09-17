@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from telegram_integration.deploy_spec import (
     ADK_APP_NAME,
     AGENT_SERVICE,
@@ -74,6 +76,12 @@ def test_agent_deploy_uses_secret_manager_not_plaintext_key() -> None:
     assert "--add-cloudsql-instances" not in joined
     assert "--set-cloudsql-instances" not in joined
     assert "SESSION_DB_PASSWORD" not in joined
+
+
+def test_agent_deploy_can_disable_unauthenticated() -> None:
+    args = agent_deploy_args(project="demo-proj", allow_unauthenticated=False)
+    assert "--no-allow-unauthenticated" in args
+    assert "--allow-unauthenticated" not in args
 
 
 def test_agent_deploy_passes_memory_bank_engine_when_set() -> None:
@@ -329,6 +337,12 @@ def test_execute_verifies_tea_agent_before_telegram(monkeypatch) -> None:
     )
     monkeypatch.setattr(mod, "_grant_cloudsql_client", lambda project: order.append("sql"))
     monkeypatch.setattr(mod, "_wait_for_iam", lambda: order.append("iam-wait"))
+    monkeypatch.setattr(
+        mod, "_deploy_tea_agent", lambda *args, **kwargs: order.append("tea-agent")
+    )
+    monkeypatch.setattr(
+        mod, "_grant_run_invoker", lambda *args, **kwargs: order.append("invoker")
+    )
     monkeypatch.setattr(mod, "_run_step", lambda label, args: order.append(label) or Proc())
     monkeypatch.setattr(
         mod, "_service_url", lambda project, region, service: f"https://{service}.example"
@@ -338,7 +352,8 @@ def test_execute_verifies_tea_agent_before_telegram(monkeypatch) -> None:
     )
     mod._execute("demo-proj", "europe-central2")
     assert order.index("iam-wait") < order.index("tea-agent")
-    assert order.index("tea-agent") < order.index("verify")
+    assert order.index("tea-agent") < order.index("invoker")
+    assert order.index("invoker") < order.index("verify")
     assert order.index("verify") < order.index(
         "telegram-integration stage 1 (placeholder SERVICE_URL)"
     )
@@ -383,3 +398,117 @@ def test_verify_cli_passes_identity_token_env(monkeypatch) -> None:
     monkeypatch.setattr(mod, "_identity_token", lambda url: "id-token" if "tea-agent" in url else "")
     mod._verify_cli("https://tea-agent.example", "--write")
     assert seen["token"] == "id-token"
+
+
+def test_is_unauthenticated_denied_detects_org_policy() -> None:
+    mod = _load_deploy_module()
+
+    class Proc:
+        def __init__(self, stderr: str) -> None:
+            self.stdout = ""
+            self.stderr = stderr
+
+    assert mod._is_unauthenticated_denied(
+        Proc(
+            "PERMISSION_DENIED: One or more users named in the policy do not "
+            "belong to a permitted customer, perhaps due to an organization "
+            "policy. Cannot bind allUsers."
+        )
+    )
+    assert mod._is_unauthenticated_denied(
+        Proc("Constraint constraints/iam.allowedPolicyMemberDomains violated")
+    )
+    assert not mod._is_unauthenticated_denied(Proc("Cloud SQL instance is not ready"))
+
+
+def test_deploy_tea_agent_retries_authenticated_when_allusers_denied(
+    monkeypatch,
+) -> None:
+    mod = _load_deploy_module()
+    calls: list[list[str]] = []
+
+    class Proc:
+        def __init__(self, code: int, stderr: str = "") -> None:
+            self.returncode = code
+            self.stdout = ""
+            self.stderr = stderr
+
+    def fake_gcloud(args: list[str]) -> Proc:
+        calls.append(args)
+        if "--allow-unauthenticated" in args:
+            return Proc(
+                1,
+                "ERROR: Policy update access denied. Cannot bind allUsers "
+                "because of allowedPolicyMemberDomains.",
+            )
+        return Proc(0)
+
+    monkeypatch.setattr(mod, "_gcloud", fake_gcloud)
+    mod._deploy_tea_agent(
+        "demo-proj",
+        "europe-central2",
+        engine_id=None,
+        engine_location=None,
+        cloud_sql="demo-proj:europe-central2:tea-sessions",
+        session_user="postgres",
+        session_db="tea_sessions",
+    )
+    assert "--allow-unauthenticated" in calls[0]
+    assert "--no-allow-unauthenticated" in calls[1]
+    assert "--allow-unauthenticated" not in calls[1]
+
+
+def test_grant_run_invoker_binds_compute_sa_and_deployer(monkeypatch) -> None:
+    mod = _load_deploy_module()
+    members: list[str] = []
+
+    class Proc:
+        returncode = 0
+        stdout = "123456789"
+        stderr = ""
+
+    def fake_gcloud(args: list[str]) -> Proc:
+        if args[:2] == ["projects", "describe"]:
+            return Proc()
+        if args[:2] == ["config", "get-value"]:
+            proc = Proc()
+            proc.stdout = "jenya@example.com"
+            return proc
+        if "add-iam-policy-binding" in args:
+            member = next(item for item in args if item.startswith("--member="))
+            members.append(member.split("=", 1)[1])
+            return Proc()
+        raise AssertionError(args)
+
+    monkeypatch.setattr(mod, "_gcloud", fake_gcloud)
+    mod._grant_run_invoker("demo-proj", "europe-central2", "tea-agent")
+    assert members == [
+        "serviceAccount:123456789-compute@developer.gserviceaccount.com",
+        "user:jenya@example.com",
+    ]
+
+
+def test_deploy_tea_agent_does_not_retry_unrelated_failure(monkeypatch) -> None:
+    mod = _load_deploy_module()
+    calls: list[list[str]] = []
+
+    class Proc:
+        returncode = 1
+        stdout = ""
+        stderr = "Cloud SQL instance is not READY"
+
+    monkeypatch.setattr(
+        mod, "_gcloud", lambda args: calls.append(args) or Proc()
+    )
+    with pytest.raises(SystemExit):
+        mod._deploy_tea_agent(
+            "demo-proj",
+            "europe-central2",
+            engine_id=None,
+            engine_location=None,
+            cloud_sql="demo-proj:europe-central2:tea-sessions",
+            session_user="postgres",
+            session_db="tea_sessions",
+        )
+    assert len(calls) == 1
+    assert "--allow-unauthenticated" in calls[0]

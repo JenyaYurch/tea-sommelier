@@ -109,6 +109,7 @@ def agent_deploy_args(
     cloud_sql_instance: str | None = None,
     session_db_user: str | None = None,
     session_db_name: str | None = None,
+    allow_unauthenticated: bool = True,
 ) -> list[str]:
     instance = normalize_cloud_sql_instance(
         cloud_sql_instance or "", project=project, region=region
@@ -121,23 +122,30 @@ def agent_deploy_args(
         ".",
         f"--project={project}",
         f"--region={region}",
-        "--allow-unauthenticated",
-        "--port=8080",
-        "--execution-environment=gen2",
-        f"--memory={AGENT_MEMORY}",
-        f"--timeout={REQUEST_TIMEOUT}",
-        "--set-secrets=" + agent_secret_bindings(cloud_sql_instance=instance),
-        "--set-env-vars="
-        + agent_env_vars(
-            project=project,
-            region=region,
-            agent_engine_id=agent_engine_id,
-            agent_engine_location=agent_engine_location,
-            cloud_sql_instance=instance,
-            session_db_user=session_db_user,
-            session_db_name=session_db_name,
-        ),
     ]
+    if allow_unauthenticated:
+        args.append("--allow-unauthenticated")
+    else:
+        args.append("--no-allow-unauthenticated")
+    args.extend(
+        [
+            "--port=8080",
+            "--execution-environment=gen2",
+            f"--memory={AGENT_MEMORY}",
+            f"--timeout={REQUEST_TIMEOUT}",
+            "--set-secrets=" + agent_secret_bindings(cloud_sql_instance=instance),
+            "--set-env-vars="
+            + agent_env_vars(
+                project=project,
+                region=region,
+                agent_engine_id=agent_engine_id,
+                agent_engine_location=agent_engine_location,
+                cloud_sql_instance=instance,
+                session_db_user=session_db_user,
+                session_db_name=session_db_name,
+            ),
+        ]
+    )
     if instance:
         args.append(f"--set-cloudsql-instances={instance}")
     args.append("--quiet")
