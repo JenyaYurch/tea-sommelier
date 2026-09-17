@@ -1,11 +1,13 @@
 """Resolve the ADK session backend for TEA-14.
 
 Cloud Run disk is ephemeral. Production sessions go to Cloud SQL Postgres via
-``DatabaseSessionService`` (ADK Cloud SQL codelab). Local/dev may use SQLite.
+``DatabaseSessionService`` (ADK Cloud SQL codelab) or to Agent Engine sessions
+when ``GOOGLE_CLOUD_AGENT_ENGINE_ID`` is set. Local/dev may use SQLite.
 
-Agent Engine (Memory Bank) is a different store: ``GOOGLE_CLOUD_AGENT_ENGINE_ID``
-does **not** imply Vertex sessions. Telegram ids ``tg_sess_<n>`` contain
-underscores, which Agent Platform custom session ids reject (``[a-z0-9-]``).
+Telegram ids are hyphenated (``tg-{id}`` / ``tg-sess-{id}``) so they match
+Agent Platform custom session ids (``[a-z0-9-]``, start with a letter).
+Cloud Run (``K_SERVICE``) refuses in-memory so a restart cannot silently drop
+taste profiles.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from urllib.parse import quote
 LOCAL_SQLITE_URI = "sqlite+aiosqlite:///./sessions.db"
 DEFAULT_DB_USER = "tea_agent"
 DEFAULT_DB_NAME = "tea_sessions"
+CLOUD_RUN_SERVICE_ENV = "K_SERVICE"
 
 
 def postgres_unix_uri(
@@ -44,8 +47,33 @@ def cloud_sql_instance_from_env() -> str:
     return (os.environ.get("CLOUD_SQL_INSTANCE") or "").strip()
 
 
+def agent_engine_id_from_env() -> str:
+    return (os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID") or "").strip()
+
+
+def missing_persistent_backend_error() -> RuntimeError:
+    return RuntimeError(
+        "Cloud Run requires a persistent ADK session backend so Telegram taste "
+        "profiles survive restarts. Set CLOUD_SQL_INSTANCE + SESSION_DB_PASSWORD "
+        "(Secret Manager), GOOGLE_CLOUD_AGENT_ENGINE_ID, or SESSION_SERVICE_URI."
+    )
+
+
+def apply_local_sqlite_default() -> str:
+    """Persist local Telegram polling to sqlite unless a DB URI/Cloud SQL is set.
+
+    Does not override an explicit ``SESSION_SERVICE_URI`` or Cloud SQL instance.
+    Agent Engine Memory Bank id is not a local session store: polling still uses
+    sqlite so profiles survive process restarts without Vertex credentials.
+    """
+    if uri := resolve_session_service_uri():
+        return uri
+    os.environ["SESSION_SERVICE_URI"] = LOCAL_SQLITE_URI
+    return LOCAL_SQLITE_URI
+
+
 def resolve_session_service_uri() -> str | None:
-    """Return a DatabaseSessionService / factory URI, or None for in-memory.
+    """Return a DatabaseSessionService / factory URI, or None for the next backend.
 
     Precedence:
     1. ``SESSION_SERVICE_URI`` (sqlite, postgres, or ``agentengine://``)

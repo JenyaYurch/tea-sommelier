@@ -56,8 +56,11 @@ def _buttons(markup) -> list[dict]:
 def test_callback_reuses_same_session_as_text_messages() -> None:
     user_id = 4242
     # Text and callback handlers both pass user.id into ask_agent, which uses these.
-    assert telegram_session_id(user_id) == "tg_sess_4242"
-    assert telegram_user_key(user_id) == "tg_4242"
+    # Hyphenated so Agent Platform custom session ids ([a-z0-9-]) accept them.
+    assert telegram_session_id(user_id) == "tg-sess-4242"
+    assert telegram_user_key(user_id) == "tg-4242"
+    assert "_" not in telegram_session_id(user_id)
+    assert "_" not in telegram_user_key(user_id)
 
 
 def test_action_callback_data_fits_telegram_limit() -> None:

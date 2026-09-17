@@ -18,9 +18,9 @@ Registered under ``shared://`` so the ADK web routes, the A2A path, and the
 reasoning_engine adapter share one instance: a session created on any surface
 is visible to the others.
 
-Sessions (TEA-14) default to in-memory, SQLite, or Cloud SQL via
-``SESSION_SERVICE_URI`` / ``CLOUD_SQL_INSTANCE``. Memory Bank is separate:
-``GOOGLE_CLOUD_AGENT_ENGINE_ID`` does not switch the session backend.
+Sessions (TEA-14) use Cloud SQL, Agent Engine, or SQLite via
+``SESSION_SERVICE_URI`` / ``CLOUD_SQL_INSTANCE`` / ``GOOGLE_CLOUD_AGENT_ENGINE_ID``.
+Cloud Run refuses in-memory so a restart cannot silently drop taste profiles.
 """
 
 from __future__ import annotations
@@ -35,7 +35,12 @@ from google.adk.cli.utils.service_factory import (
     create_session_service_from_options,
 )
 
-from tea_agent.app_utils.session_uri import resolve_session_service_uri
+from tea_agent.app_utils.session_uri import (
+    CLOUD_RUN_SERVICE_ENV,
+    agent_engine_id_from_env,
+    missing_persistent_backend_error,
+    resolve_session_service_uri,
+)
 
 SESSION_SERVICE_URI = "shared://session"
 ARTIFACT_SERVICE_URI = "shared://artifact"
@@ -53,6 +58,16 @@ def get_session_service():
         return create_session_service_from_options(
             base_dir=_AGENT_DIR, session_service_uri=uri
         )
+    if agent_engine_id := agent_engine_id_from_env():
+        from google.adk.sessions.vertex_ai_session_service import VertexAiSessionService
+
+        return VertexAiSessionService(
+            project=os.environ.get("GOOGLE_CLOUD_PROJECT"),
+            location=_agent_engine_location(),
+            agent_engine_id=agent_engine_id,
+        )
+    if os.environ.get(CLOUD_RUN_SERVICE_ENV):
+        raise missing_persistent_backend_error()
     from google.adk.sessions.in_memory_session_service import InMemorySessionService
 
     return InMemorySessionService()
