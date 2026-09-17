@@ -1,6 +1,8 @@
-"""Two-stage Cloud Run deploy for tea-agent + telegram-integration (TEA-13).
+"""Two-stage Cloud Run deploy for tea-agent + telegram-integration (TEA-13/TEA-14).
 
 Does not deploy unless you pass --execute (explicit approval).
+If Cloud SQL and Agent Engine are unset, --execute creates Cloud SQL
+``tea-sessions``, deploys, then write/restart/check so taste profiles survive.
 
 Usage:
     uv run python scripts/deploy_cloud_run.py
@@ -14,21 +16,25 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from telegram_integration.deploy_spec import (
     ADK_APP_NAME,
     AGENT_SERVICE,
     CLOUD_RUN_REGION,
+    CLOUD_SQL_INSTANCE_NAME,
     DEFAULT_PROJECT,
     DEFAULT_SESSION_DB_NAME,
     DEFAULT_SESSION_DB_USER,
     PLACEHOLDER_SERVICE_URL,
     TELEGRAM_SERVICE,
     agent_deploy_args,
+    agent_restart_args,
     telegram_deploy_args,
     telegram_update_env_args,
 )
+from tea_agent.app_utils.session_uri import normalize_cloud_sql_instance
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_APIS = (
@@ -43,6 +49,8 @@ REQUIRED_APIS = (
 SECRETS = ("GOOGLE_API_KEY", "TELEGRAM_BOT_TOKEN")
 CLOUD_SQL_CLIENT_ROLE = "roles/cloudsql.client"
 BUILDER_ROLE = "roles/run.builder"
+IAM_SETTLE_SEC = 30
+VERIFY_ATTEMPTS = 5
 
 
 def _gcloud_bin() -> str:
@@ -130,9 +138,55 @@ def _cloud_sql_env() -> tuple[str | None, str, str]:
     return instance or None, user, database
 
 
+def _normalized_cloud_sql(project: str, region: str) -> tuple[str | None, str, str]:
+    instance, user, database = _cloud_sql_env()
+    if instance:
+        instance = normalize_cloud_sql_instance(
+            instance, project=project, region=region
+        )
+    return instance or None, user, database
+
+
+def _load_setup_cloud_sql():
+    import importlib.util
+
+    path = ROOT / "scripts" / "setup_cloud_sql.py"
+    spec = importlib.util.spec_from_file_location("setup_cloud_sql", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit("scripts/setup_cloud_sql.py is missing")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _ensure_session_backend(
+    project: str, region: str, *, provision: bool
+) -> tuple[str | None, str | None, str | None, str, str]:
+    """Return engine_id, engine_location, cloud_sql, db user, db name.
+
+    --execute with no backend creates Cloud SQL ``tea-sessions`` so a restart
+    cannot silently drop Telegram taste profiles.
+    """
+    engine_id, engine_location = _agent_engine_env()
+    cloud_sql, user, database = _normalized_cloud_sql(project, region)
+    if cloud_sql or engine_id:
+        return engine_id, engine_location, cloud_sql, user, database
+    if not provision:
+        return None, None, None, user, database
+    setup = _load_setup_cloud_sql()
+    instance_name = setup.CLOUD_SQL_INSTANCE_NAME
+    print(
+        "No CLOUD_SQL_INSTANCE or GOOGLE_CLOUD_AGENT_ENGINE_ID in env; "
+        f"provisioning Cloud SQL {instance_name} for DatabaseSessionService."
+    )
+    setup._execute(project, region, instance_name, user, database)
+    conn = setup.instance_connection_name(project, region, instance_name)
+    return engine_id, engine_location, conn, user, database
+
+
 def _print_plan(project: str, region: str) -> None:
     engine_id, engine_location = _agent_engine_env()
-    cloud_sql, session_user, session_db = _cloud_sql_env()
+    cloud_sql, session_user, session_db = _normalized_cloud_sql(project, region)
     print("Cloud Run two-stage plan (no secrets printed)")
     print(f"  project:  {project}")
     print(f"  region:   {region}")
@@ -147,9 +201,15 @@ def _print_plan(project: str, region: str) -> None:
         print(f"  Cloud SQL sessions: {cloud_sql}")
         print(f"  Session DB: {session_user}@{session_db}")
         print("  SESSION_DB_PASSWORD from Secret Manager (not printed)")
+    elif engine_id:
+        print("  Sessions: Agent Engine (GOOGLE_CLOUD_AGENT_ENGINE_ID)")
     else:
-        print("  Sessions: in-memory unless CLOUD_SQL_INSTANCE is set")
-        print("  Provision: uv run python scripts/setup_cloud_sql.py")
+        cloud_sql = f"{project}:{region}:{CLOUD_SQL_INSTANCE_NAME}"
+        print(
+            f"  Sessions: --execute will CREATE Cloud SQL {CLOUD_SQL_INSTANCE_NAME} "
+            f"({cloud_sql}, POSTGRES_17, db-f1-micro, zonal), then deploy and verify"
+        )
+        print(f"  Session DB: {session_user}@{session_db}")
     print()
     print(
         "1. gcloud",
@@ -164,8 +224,12 @@ def _print_plan(project: str, region: str) -> None:
         ),
     )
     print()
+    print("2. verify_session_persistence.py --write against tea-agent URL")
+    print("3. gcloud", *agent_restart_args(project=project, region=region, probe="<ts>"))
+    print("4. verify_session_persistence.py --check after the new revision")
+    print()
     print(
-        "2. gcloud",
+        "5. gcloud",
         *telegram_deploy_args(
             project=project,
             region=region,
@@ -175,7 +239,7 @@ def _print_plan(project: str, region: str) -> None:
     )
     print()
     print(
-        "3. gcloud",
+        "6. gcloud",
         *telegram_update_env_args(
             project=project,
             region=region,
@@ -270,6 +334,12 @@ def _grant_cloudsql_client(project: str) -> None:
     print(f"Granted {CLOUD_SQL_CLIENT_ROLE} to compute default SA")
 
 
+def _wait_for_iam() -> None:
+    """IAM bindings are eventually consistent; the Cloud SQL proxy needs cloudsql.client."""
+    print(f"Waiting {IAM_SETTLE_SEC}s for IAM to propagate")
+    time.sleep(IAM_SETTLE_SEC)
+
+
 def _run_step(label: str, args: list[str]) -> subprocess.CompletedProcess[str]:
     print(f"{label}: gcloud {' '.join(args)}")
     proc = _gcloud(args)
@@ -300,19 +370,65 @@ def _service_url(project: str, region: str, service: str) -> str:
     return url
 
 
-def _execute(project: str, region: str) -> None:
+def _verify_cli(agent_url: str, *flags: str) -> None:
+    last: subprocess.CompletedProcess[str] | None = None
+    for attempt in range(1, VERIFY_ATTEMPTS + 1):
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "verify_session_persistence.py"),
+                "--base-url",
+                agent_url,
+                *flags,
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if proc.stdout.strip():
+            print(proc.stdout.strip())
+        if proc.returncode == 0:
+            return
+        last = proc
+        print(
+            f"Session persistence {flags} attempt {attempt}/{VERIFY_ATTEMPTS} failed; retrying"
+        )
+        time.sleep(2 * attempt)
+    _fail("Session persistence verify failed", last)
+
+
+def _verify_after_deploy(project: str, region: str, agent_url: str) -> None:
+    """Write a Telegram-shaped profile, replace the revision, then check it."""
+    print("TEA-14: writing probe session")
+    _verify_cli(agent_url, "--write")
+    probe = str(int(time.time()))
+    _run_step(
+        "restart tea-agent (new revision)",
+        agent_restart_args(project=project, region=region, probe=probe),
+    )
+    print("TEA-14: checking probe session after revision")
+    _verify_cli(agent_url, "--check")
+    print("TEA-14: taste profile survived Cloud Run revision restart")
+
+
+def _execute(project: str, region: str, *, skip_verify: bool = False) -> None:
     print(f"Using GCP project {project}")
     print(f"Cloud Run region {region}")
     _gcloud(["config", "set", "project", project])
     _gcloud(["config", "set", "run/region", region])
     _enable_apis(project)
     _grant_builder_role(project)
-    engine_id, engine_location = _agent_engine_env()
-    cloud_sql, session_user, session_db = _cloud_sql_env()
+    engine_id, engine_location, cloud_sql, session_user, session_db = (
+        _ensure_session_backend(project, region, provision=True)
+    )
+    if not cloud_sql and not engine_id:
+        _fail("Session backend missing after Cloud SQL provision")
     extra_secrets = ("SESSION_DB_PASSWORD",) if cloud_sql else ()
     _grant_secret_access(project, extra_secrets)
     if cloud_sql:
         _grant_cloudsql_client(project)
+        _wait_for_iam()
 
     _run_step(
         "tea-agent",
@@ -328,6 +444,12 @@ def _execute(project: str, region: str) -> None:
     )
     agent_url = _service_url(project, region, AGENT_SERVICE)
     print(f"tea-agent URL: {agent_url}")
+    if skip_verify:
+        print("Skipping TEA-14 session verify (--skip-verify).")
+    else:
+        # Prove Cloud SQL/Agent Engine before Telegram deploy, so a missing
+        # TELEGRAM_BOT_TOKEN cannot skip the restart check.
+        _verify_after_deploy(project, region, agent_url)
 
     _run_step(
         "telegram-integration stage 1 (placeholder SERVICE_URL)",
@@ -363,12 +485,17 @@ def main() -> None:
         action="store_true",
         help="Actually deploy. Default is dry-run.",
     )
+    parser.add_argument(
+        "--skip-verify",
+        action="store_true",
+        help="Do not write/restart/check a probe session after --execute.",
+    )
     args = parser.parse_args()
     project = _project_id(args.project)
     if not args.execute:
         _print_plan(project, args.region)
         return
-    _execute(project, args.region)
+    _execute(project, args.region, skip_verify=args.skip_verify)
 
 
 if __name__ == "__main__":

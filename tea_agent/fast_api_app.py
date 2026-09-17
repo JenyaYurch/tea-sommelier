@@ -13,30 +13,45 @@
 # limitations under the License.
 
 import contextlib
+import logging
 import os
 from collections.abc import AsyncIterator
 
-import google.auth
 from a2a.server.tasks import InMemoryTaskStore
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from google.adk.cli.fast_api import get_fast_api_app
 from google.adk.runners import Runner
-from google.cloud import logging as google_cloud_logging
 
 from tea_agent.app_utils import services
 from tea_agent.app_utils.a2a import attach_a2a_routes
 from tea_agent.app_utils.typing import Feedback
 
 load_dotenv()
-_, project_id = google.auth.default()
-logging_client = google_cloud_logging.Client()
-logger = logging_client.logger(__name__)
 allow_origins = (
     os.getenv("ALLOW_ORIGINS", "").split(",") if os.getenv("ALLOW_ORIGINS") else None
 )
 
 AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_log = logging.getLogger(__name__)
+
+
+def _otel_to_cloud() -> bool:
+    raw = os.getenv("OTEL_TO_CLOUD")
+    if raw is None:
+        return True
+    return raw.strip().lower() not in {"0", "false", "no"}
+
+
+def _log_feedback(payload: dict) -> None:
+    try:
+        from google.cloud import logging as google_cloud_logging
+
+        google_cloud_logging.Client().logger(__name__).log_struct(
+            payload, severity="INFO"
+        )
+    except Exception:
+        _log.info("feedback %s", payload)
 
 
 @contextlib.asynccontextmanager
@@ -46,7 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     runner = Runner(
         app=adk_app,
-        session_service=services.get_session_service(),
+        session_service=await services.ensure_session_store_ready(),
         artifact_service=services.get_artifact_service(),
         memory_service=services.get_memory_service(),
         auto_create_session=True,
@@ -70,8 +85,9 @@ app: FastAPI = get_fast_api_app(
     allow_origins=allow_origins,
     session_service_uri=services.SESSION_SERVICE_URI,
     memory_service_uri=services.MEMORY_SERVICE_URI,
-    otel_to_cloud=True,
+    otel_to_cloud=_otel_to_cloud(),
     lifespan=lifespan,
+    auto_create_session=True,
 )
 app.title = "tea-sommelier"
 app.description = "API for interacting with the Agent tea-sommelier"
@@ -87,7 +103,7 @@ def collect_feedback(feedback: Feedback) -> dict[str, str]:
     Returns:
         Success message
     """
-    logger.log_struct(feedback.model_dump(), severity="INFO")
+    _log_feedback(feedback.model_dump())
     return {"status": "success"}
 
 

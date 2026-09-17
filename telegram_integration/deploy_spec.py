@@ -7,6 +7,8 @@ because SERVICE_URL is unknown until the first revision exists
 
 from __future__ import annotations
 
+from tea_agent.app_utils.session_uri import normalize_cloud_sql_instance
+
 DEFAULT_PROJECT = "gen-lang-client-0393777014"
 CLOUD_RUN_REGION = "europe-central2"
 AGENT_SERVICE = "tea-agent"
@@ -18,7 +20,7 @@ TELEGRAM_ARGS = "run,python,-m,telegram_integration"
 AGENT_MEMORY = "1Gi"
 TELEGRAM_MEMORY = "512Mi"
 REQUEST_TIMEOUT = "300"
-DEFAULT_SESSION_DB_USER = "tea_agent"
+DEFAULT_SESSION_DB_USER = "postgres"
 DEFAULT_SESSION_DB_NAME = "tea_sessions"
 CLOUD_SQL_INSTANCE_NAME = "tea-sessions"
 
@@ -43,6 +45,7 @@ def agent_env_vars(
     *,
     project: str,
     location: str = "global",
+    region: str = CLOUD_RUN_REGION,
     agent_engine_id: str | None = None,
     agent_engine_location: str | None = None,
     cloud_sql_instance: str | None = None,
@@ -60,7 +63,9 @@ def agent_env_vars(
     engine_location = (agent_engine_location or "").strip()
     if engine_location:
         parts.append(f"GOOGLE_CLOUD_AGENT_ENGINE_LOCATION={engine_location}")
-    instance = (cloud_sql_instance or "").strip()
+    instance = normalize_cloud_sql_instance(
+        cloud_sql_instance or "", project=project, region=region
+    )
     if instance:
         parts.append(f"CLOUD_SQL_INSTANCE={instance}")
         parts.append(
@@ -105,6 +110,9 @@ def agent_deploy_args(
     session_db_user: str | None = None,
     session_db_name: str | None = None,
 ) -> list[str]:
+    instance = normalize_cloud_sql_instance(
+        cloud_sql_instance or "", project=project, region=region
+    )
     args = [
         "run",
         "deploy",
@@ -115,24 +123,45 @@ def agent_deploy_args(
         f"--region={region}",
         "--allow-unauthenticated",
         "--port=8080",
+        "--execution-environment=gen2",
         f"--memory={AGENT_MEMORY}",
         f"--timeout={REQUEST_TIMEOUT}",
-        "--set-secrets=" + agent_secret_bindings(cloud_sql_instance=cloud_sql_instance),
+        "--set-secrets=" + agent_secret_bindings(cloud_sql_instance=instance),
         "--set-env-vars="
         + agent_env_vars(
             project=project,
+            region=region,
             agent_engine_id=agent_engine_id,
             agent_engine_location=agent_engine_location,
-            cloud_sql_instance=cloud_sql_instance,
+            cloud_sql_instance=instance,
             session_db_user=session_db_user,
             session_db_name=session_db_name,
         ),
     ]
-    instance = (cloud_sql_instance or "").strip()
     if instance:
-        args.append(f"--add-cloudsql-instances={instance}")
+        args.append(f"--set-cloudsql-instances={instance}")
     args.append("--quiet")
     return args
+
+
+def agent_restart_args(
+    *,
+    project: str,
+    region: str = CLOUD_RUN_REGION,
+    service: str = AGENT_SERVICE,
+    probe: str,
+) -> list[str]:
+    """Force a new tea-agent revision so TEA-14 can check Cloud SQL after restart."""
+    return [
+        "run",
+        "services",
+        "update",
+        service,
+        f"--project={project}",
+        f"--region={region}",
+        f"--update-env-vars=TEA14_SESSION_PROBE={probe}",
+        "--quiet",
+    ]
 
 
 def telegram_deploy_args(

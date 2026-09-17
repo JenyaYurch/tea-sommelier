@@ -50,10 +50,10 @@ async def test_ask_creates_session_then_runs() -> None:
         calls.append((request.method, str(request.url)))
         if request.method == "GET":
             return httpx.Response(404, text="missing")
-        if request.url.path.endswith("/sessions/tg_sess_1"):
-            return httpx.Response(200, json={"id": "tg_sess_1"})
+        if request.url.path.endswith("/sessions/tg-sess-1"):
+            return httpx.Response(200, json={"id": "tg-sess-1"})
         payload = request.content.decode()
-        assert "tg_1" in payload
+        assert "tg-1" in payload
         assert "мягкий" in payload
         assert "tea_agent" in payload
         return httpx.Response(
@@ -61,10 +61,41 @@ async def test_ask_creates_session_then_runs() -> None:
             json=[{"content": {"parts": [{"text": "три сорта"}]}}],
         )
 
-    reply = await _client(handler).ask("tg_1", "tg_sess_1", "мягкий")
+    reply = await _client(handler).ask("tg-1", "tg-sess-1", "мягкий")
     assert reply == "три сорта"
     assert any(method == "GET" for method, _ in calls)
     assert any(method == "POST" and "/run" in url for method, url in calls)
+
+
+@pytest.mark.asyncio
+async def test_ask_reuses_existing_session_and_does_not_recreate() -> None:
+    """Webhook restart path: GET 200 must not POST an empty session and wipe state."""
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "tg-sess-1",
+                    "userId": "tg-1",
+                    "state": {"user:experience": "новичок"},
+                },
+            )
+        assert request.url.path.endswith("/run")
+        return httpx.Response(
+            200,
+            json=[{"content": {"parts": [{"text": "снова мягкий"}]}}],
+        )
+
+    reply = await _client(handler).ask("tg-1", "tg-sess-1", "ещё")
+    assert reply == "снова мягкий"
+    assert calls[0] == ("GET", "/apps/tea_agent/users/tg-1/sessions/tg-sess-1")
+    assert not any(
+        method == "POST" and path.endswith("/sessions/tg-sess-1")
+        for method, path in calls
+    )
 
 
 @pytest.mark.asyncio
@@ -75,7 +106,7 @@ async def test_ask_quota_raises() -> None:
         return httpx.Response(429, text="RESOURCE_EXHAUSTED")
 
     with pytest.raises(AdkQuotaError):
-        await _client(handler).ask("tg_1", "tg_sess_1", "hi")
+        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
 
 
 @pytest.mark.asyncio
@@ -86,4 +117,4 @@ async def test_ask_server_error() -> None:
         return httpx.Response(503, text="down")
 
     with pytest.raises(AdkClientError):
-        await _client(handler).ask("tg_1", "tg_sess_1", "hi")
+        await _client(handler).ask("tg-1", "tg-sess-1", "hi")

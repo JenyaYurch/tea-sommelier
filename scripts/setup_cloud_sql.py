@@ -2,7 +2,7 @@
 
 Does not create anything unless you pass --execute (explicit approval).
 Cloud Run stays in europe-central2; the instance is created in the same region
-so the unix socket from ``--add-cloudsql-instances`` works.
+so the unix socket from ``--set-cloudsql-instances`` works.
 
 Usage:
     uv run python scripts/setup_cloud_sql.py
@@ -119,6 +119,7 @@ def _print_plan(
     print(f"  secret:    {SECRET_NAME}")
     print()
     print("Creates or reuses a Cloud SQL Postgres instance for DatabaseSessionService.")
+    print("Cloud Run connects as postgres (database owner) so POSTGRES_17 can CREATE tables.")
     print("Does not deploy Cloud Run. After --execute, set CLOUD_SQL_INSTANCE and redeploy.")
     print("Dry-run only. Pass --execute after explicit approval to create/update.")
 
@@ -244,6 +245,9 @@ def _execute(
         if proc.returncode != 0:
             _fail("Failed to create Cloud SQL instance", proc)
         print(f"Created instance {instance}")
+        # postgres owns public schema on POSTGRES_17; Cloud Run must use this
+        # password or GRANT CREATE, otherwise prepare_tables cannot create tables.
+        _upsert_secret(project, SECRET_NAME, password)
     else:
         print(f"Reusing existing instance {instance}")
 
@@ -265,7 +269,26 @@ def _execute(
     else:
         print(f"Reusing database {database}")
 
-    if not _user_exists(project, instance, user):
+    if user == "postgres":
+        if not _secret_exists(project, SECRET_NAME):
+            proc = _gcloud(
+                [
+                    "sql",
+                    "users",
+                    "set-password",
+                    user,
+                    f"--instance={instance}",
+                    f"--project={project}",
+                    f"--password={password}",
+                    "--quiet",
+                ]
+            )
+            if proc.returncode != 0:
+                _fail(f"Failed to set password for {user}", proc)
+            _upsert_secret(project, SECRET_NAME, password)
+        else:
+            print(f"Reusing database user {user} (password not rotated)")
+    elif not _user_exists(project, instance, user):
         proc = _gcloud(
             [
                 "sql",
@@ -282,6 +305,10 @@ def _execute(
             _fail(f"Failed to create database user {user}", proc)
         print(f"Created database user {user}")
         _upsert_secret(project, SECRET_NAME, password)
+        print(
+            "POSTGRES_17: grant CREATE ON SCHEMA public to this user, or set "
+            "SESSION_DB_USER=postgres so DatabaseSessionService can create tables."
+        )
     else:
         print(f"Reusing database user {user} (password not rotated)")
         if not _secret_exists(project, SECRET_NAME):

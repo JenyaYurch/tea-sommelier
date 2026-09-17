@@ -89,7 +89,7 @@ uv run python scripts/deploy_cloud_run.py
 uv run python scripts/deploy_cloud_run.py --execute
 ```
 
-`--execute` deploys for real. Cloud SQL is required for Telegram profiles to survive Cloud Run restarts (`CLOUD_SQL_INSTANCE` + Secret Manager `SESSION_DB_PASSWORD`). Local polling can use `SESSION_SERVICE_URI=sqlite+aiosqlite:///./sessions.db`. Do not run local polling and the webhook at the same time (Telegram allows one getUpdates client).
+`--execute` provisions Cloud SQL `tea-sessions` if neither `CLOUD_SQL_INSTANCE` nor `GOOGLE_CLOUD_AGENT_ENGINE_ID` is set, deploys `tea-agent` as `SESSION_DB_USER=postgres` (POSTGRES_17 public schema owner, so `prepare_tables` can CREATE), then proves TEA-14 (`verify_session_persistence.py --write`, a new revision, `--check`) before deploying `telegram-integration`. Telegram taste profiles survive Cloud Run restarts with Cloud SQL (`SESSION_DB_PASSWORD` in Secret Manager) or Agent Engine sessions. Cloud Run refuses in-memory and sqlite (container disk is ephemeral). Local polling defaults to `SESSION_SERVICE_URI=sqlite+aiosqlite:///./sessions.db`. Do not run local polling and the webhook at the same time (Telegram allows one getUpdates client).
 
 ## Deployment
 

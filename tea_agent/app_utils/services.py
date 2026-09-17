@@ -18,14 +18,16 @@ Registered under ``shared://`` so the ADK web routes, the A2A path, and the
 reasoning_engine adapter share one instance: a session created on any surface
 is visible to the others.
 
-Sessions (TEA-14) default to in-memory, SQLite, or Cloud SQL via
-``SESSION_SERVICE_URI`` / ``CLOUD_SQL_INSTANCE``. Memory Bank is separate:
-``GOOGLE_CLOUD_AGENT_ENGINE_ID`` does not switch the session backend.
+Sessions (TEA-14) use Cloud SQL, Agent Engine, or SQLite via
+``SESSION_SERVICE_URI`` / ``CLOUD_SQL_INSTANCE`` / ``GOOGLE_CLOUD_AGENT_ENGINE_ID``.
+Cloud Run refuses in-memory so a restart cannot silently drop taste profiles.
 """
 
 from __future__ import annotations
 
+import asyncio
 import functools
+import logging
 import os
 
 from google.adk.artifacts import GcsArtifactService, InMemoryArtifactService
@@ -35,11 +37,21 @@ from google.adk.cli.utils.service_factory import (
     create_session_service_from_options,
 )
 
-from tea_agent.app_utils.session_uri import resolve_session_service_uri
+from tea_agent.app_utils.session_uri import (
+    CLOUD_RUN_SERVICE_ENV,
+    agent_engine_id_from_env,
+    is_ephemeral_session_uri,
+    missing_persistent_backend_error,
+    postgres_engine_kwargs,
+    postgres_unix_socket_path,
+    resolve_session_service_uri,
+)
 
 SESSION_SERVICE_URI = "shared://session"
 ARTIFACT_SERVICE_URI = "shared://artifact"
 MEMORY_SERVICE_URI = "shared://memory"
+_PREPARE_TABLE_ATTEMPTS = 8
+_log = logging.getLogger(__name__)
 
 _AGENT_DIR = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -50,12 +62,96 @@ _AGENT_DIR = os.path.dirname(
 def get_session_service():
     """Process-wide session service shared across every serving surface."""
     if uri := resolve_session_service_uri():
+        if os.environ.get(CLOUD_RUN_SERVICE_ENV) and is_ephemeral_session_uri(uri):
+            raise missing_persistent_backend_error()
+        kwargs = postgres_engine_kwargs(uri)
         return create_session_service_from_options(
-            base_dir=_AGENT_DIR, session_service_uri=uri
+            base_dir=_AGENT_DIR,
+            session_service_uri=uri,
+            session_db_kwargs=kwargs or None,
         )
+    if agent_engine_id := agent_engine_id_from_env():
+        from google.adk.sessions.vertex_ai_session_service import VertexAiSessionService
+
+        return VertexAiSessionService(
+            project=os.environ.get("GOOGLE_CLOUD_PROJECT"),
+            location=_agent_engine_location(),
+            agent_engine_id=agent_engine_id,
+        )
+    if os.environ.get(CLOUD_RUN_SERVICE_ENV):
+        raise missing_persistent_backend_error()
     from google.adk.sessions.in_memory_session_service import InMemorySessionService
 
     return InMemorySessionService()
+
+
+async def ensure_session_store_ready():
+    """Create DatabaseSessionService tables before the first Telegram /run.
+
+    ADK otherwise pays this on the first request. On Cloud Run a down Cloud SQL
+    socket should fail the revision at startup instead of dropping profiles.
+    The unix socket can appear a moment after process start; retry connect errors.
+    """
+    service = get_session_service()
+    prepare = getattr(service, "prepare_tables", None)
+    if not callable(prepare):
+        return service
+    await _wait_for_postgres_unix_socket(resolve_session_service_uri())
+    last_error: BaseException | None = None
+    for attempt in range(1, _PREPARE_TABLE_ATTEMPTS + 1):
+        try:
+            await prepare()
+            return service
+        except Exception as err:
+            last_error = err
+            if attempt == _PREPARE_TABLE_ATTEMPTS or not _is_retryable_db_error(err):
+                raise
+            _log.warning(
+                "Session store not ready (attempt %s/%s): %s",
+                attempt,
+                _PREPARE_TABLE_ATTEMPTS,
+                err,
+            )
+            await asyncio.sleep(0.5 * attempt)
+    raise last_error  # pragma: no cover
+
+
+async def _wait_for_postgres_unix_socket(uri: str | None) -> None:
+    """Cloud SQL Auth Proxy can mount ``/cloudsql/...`` after process start."""
+    if not os.environ.get(CLOUD_RUN_SERVICE_ENV):
+        return
+    path = postgres_unix_socket_path(uri or "")
+    if not path:
+        return
+    for attempt in range(1, _PREPARE_TABLE_ATTEMPTS + 1):
+        if os.path.exists(path):
+            return
+        if attempt == _PREPARE_TABLE_ATTEMPTS:
+            _log.warning("Cloud SQL unix socket still missing: %s", path)
+            return
+        _log.warning(
+            "Waiting for Cloud SQL unix socket (attempt %s/%s): %s",
+            attempt,
+            _PREPARE_TABLE_ATTEMPTS,
+            path,
+        )
+        await asyncio.sleep(0.5 * attempt)
+
+
+def _is_retryable_db_error(err: BaseException) -> bool:
+    text = str(err).lower()
+    needles = (
+        "connection refused",
+        "could not connect",
+        "connection does not exist",
+        "timeout",
+        "temporarily unavailable",
+        "the socket",
+        "no such file",
+    )
+    return isinstance(err, (ConnectionError, OSError, TimeoutError)) or any(
+        needle in text for needle in needles
+    )
 
 
 def _agent_engine_location() -> str | None:
