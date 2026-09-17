@@ -16,7 +16,7 @@ import os
 from urllib.parse import parse_qs, quote, urlparse
 
 LOCAL_SQLITE_URI = "sqlite+aiosqlite:///./sessions.db"
-DEFAULT_DB_USER = "tea_agent"
+DEFAULT_DB_USER = "postgres"
 DEFAULT_DB_NAME = "tea_sessions"
 DEFAULT_SOCKET_DIR = "/cloudsql"
 DEFAULT_CLOUD_SQL_REGION = "europe-central2"

@@ -33,6 +33,7 @@ def test_setup_cloud_sql_plan_mentions_region_and_dry_run(capsys) -> None:
     assert "Dry-run" in out
     assert "--execute" in out
     assert "no secrets printed" in out
+    assert "CREATE tables" in out
 
 
 def test_setup_cloud_sql_env_lines_do_not_print_password(capsys) -> None:
@@ -53,3 +54,32 @@ def test_setup_cloud_sql_env_lines_do_not_print_password(capsys) -> None:
     assert "sqlite+aiosqlite:///./sessions.db" in out
     assert "SESSION_DB_PASSWORD=" not in out.split("lives in Secret Manager")[0]
     assert "not printed" in out
+
+
+def test_setup_execute_skips_create_for_postgres_user(monkeypatch) -> None:
+    """POSTGRES_17 public schema: Cloud Run uses the database owner, not a new login."""
+    mod = _load_setup_module()
+    calls: list[list[str]] = []
+
+    class Proc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(mod, "_gcloud", lambda args, *, stdin=None: calls.append(args) or Proc())
+    monkeypatch.setattr(mod, "_instance_exists", lambda *a: False)
+    monkeypatch.setattr(mod, "_database_exists", lambda *a: False)
+    monkeypatch.setattr(mod, "_secret_exists", lambda *a: True)
+    monkeypatch.setattr(mod, "_upsert_secret", lambda *a: calls.append(["secrets", "upsert"]))
+    monkeypatch.setattr(mod.secrets, "token_urlsafe", lambda n: "x" * n)
+    mod._execute(
+        "demo-proj",
+        "europe-central2",
+        "tea-sessions",
+        "postgres",
+        "tea_sessions",
+    )
+    assert any(args[:3] == ["sql", "instances", "create"] for args in calls)
+    assert any(args[:3] == ["sql", "databases", "create"] for args in calls)
+    assert ["secrets", "upsert"] in calls
+    assert not any(args[:3] == ["sql", "users", "create"] for args in calls)

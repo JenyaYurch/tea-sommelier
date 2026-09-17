@@ -122,6 +122,16 @@ def test_agent_deploy_expands_short_cloud_sql_instance_name() -> None:
     assert "SESSION_DB_PASSWORD=SESSION_DB_PASSWORD:latest" in joined
 
 
+def test_agent_deploy_defaults_session_user_to_postgres() -> None:
+    args = agent_deploy_args(
+        project="demo-proj",
+        cloud_sql_instance="demo-proj:europe-central2:tea-sessions",
+    )
+    env = next(item for item in args if item.startswith("--set-env-vars="))
+    assert "SESSION_DB_USER=postgres" in env
+    assert "--set-cloudsql-instances=demo-proj:europe-central2:tea-sessions" in args
+
+
 def test_agent_restart_args_force_new_revision_without_secrets() -> None:
     args = agent_restart_args(
         project="demo-proj",

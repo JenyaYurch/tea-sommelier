@@ -20,7 +20,7 @@ TELEGRAM_ARGS = "run,python,-m,telegram_integration"
 AGENT_MEMORY = "1Gi"
 TELEGRAM_MEMORY = "512Mi"
 REQUEST_TIMEOUT = "300"
-DEFAULT_SESSION_DB_USER = "tea_agent"
+DEFAULT_SESSION_DB_USER = "postgres"
 DEFAULT_SESSION_DB_NAME = "tea_sessions"
 CLOUD_SQL_INSTANCE_NAME = "tea-sessions"
 
