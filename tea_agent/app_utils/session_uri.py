@@ -13,7 +13,7 @@ taste profiles.
 from __future__ import annotations
 
 import os
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 LOCAL_SQLITE_URI = "sqlite+aiosqlite:///./sessions.db"
 DEFAULT_DB_USER = "tea_agent"
@@ -51,11 +51,27 @@ def agent_engine_id_from_env() -> str:
     return (os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID") or "").strip()
 
 
+def is_ephemeral_session_uri(uri: str) -> bool:
+    """True if this URI cannot survive Cloud Run instance replacement.
+
+    sqlite/file live on container disk, which Cloud Run throws away. Postgres
+    unix-socket URIs and ``agentengine://`` are durable.
+    """
+    scheme = (urlparse(uri).scheme or "").lower()
+    if scheme.startswith("postgresql"):
+        return False
+    if scheme in {"agentengine", "agent-engine"}:
+        return False
+    return True
+
+
 def missing_persistent_backend_error() -> RuntimeError:
     return RuntimeError(
         "Cloud Run requires a persistent ADK session backend so Telegram taste "
         "profiles survive restarts. Set CLOUD_SQL_INSTANCE + SESSION_DB_PASSWORD "
-        "(Secret Manager), GOOGLE_CLOUD_AGENT_ENGINE_ID, or SESSION_SERVICE_URI."
+        "(Secret Manager) or GOOGLE_CLOUD_AGENT_ENGINE_ID. "
+        "SESSION_SERVICE_URI must be postgresql+asyncpg:// or agentengine://; "
+        "sqlite is ephemeral on Cloud Run."
     )
 
 

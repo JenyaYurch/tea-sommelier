@@ -91,16 +91,29 @@ def test_cloud_run_without_backend_raises(monkeypatch) -> None:
         _reset()
 
 
-def test_cloud_run_uses_sqlite_uri_when_set(monkeypatch) -> None:
+def test_cloud_run_rejects_sqlite_uri(monkeypatch) -> None:
+    _clear_backends(monkeypatch)
+    monkeypatch.setenv(CLOUD_RUN_SERVICE_ENV, "tea-agent")
+    monkeypatch.setenv("SESSION_SERVICE_URI", LOCAL_SQLITE_URI)
+    _reset()
+    try:
+        with pytest.raises(RuntimeError, match="sqlite is ephemeral"):
+            services.get_session_service()
+    finally:
+        _reset()
+
+
+def test_cloud_run_accepts_postgres_uri(monkeypatch) -> None:
     sentinel = object()
+    uri = "postgresql+asyncpg://tea_agent:x@/tea_sessions?host=/cloudsql/p:r:i"
 
     def fake_create(*, base_dir, session_service_uri):
-        assert session_service_uri == LOCAL_SQLITE_URI
+        assert session_service_uri == uri
         return sentinel
 
     _clear_backends(monkeypatch)
     monkeypatch.setenv(CLOUD_RUN_SERVICE_ENV, "tea-agent")
-    monkeypatch.setenv("SESSION_SERVICE_URI", LOCAL_SQLITE_URI)
+    monkeypatch.setenv("SESSION_SERVICE_URI", uri)
     monkeypatch.setattr(services, "create_session_service_from_options", fake_create)
     _reset()
     try:
