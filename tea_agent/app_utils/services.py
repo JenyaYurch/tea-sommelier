@@ -38,6 +38,7 @@ from google.adk.cli.utils.service_factory import (
 from tea_agent.app_utils.session_uri import (
     CLOUD_RUN_SERVICE_ENV,
     agent_engine_id_from_env,
+    is_ephemeral_session_uri,
     missing_persistent_backend_error,
     resolve_session_service_uri,
 )
@@ -55,6 +56,8 @@ _AGENT_DIR = os.path.dirname(
 def get_session_service():
     """Process-wide session service shared across every serving surface."""
     if uri := resolve_session_service_uri():
+        if os.environ.get(CLOUD_RUN_SERVICE_ENV) and is_ephemeral_session_uri(uri):
+            raise missing_persistent_backend_error()
         return create_session_service_from_options(
             base_dir=_AGENT_DIR, session_service_uri=uri
         )
