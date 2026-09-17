@@ -1,6 +1,8 @@
-"""Two-stage Cloud Run deploy for tea-agent + telegram-integration (TEA-13).
+"""Two-stage Cloud Run deploy for tea-agent + telegram-integration (TEA-13/TEA-14).
 
 Does not deploy unless you pass --execute (explicit approval).
+If Cloud SQL and Agent Engine are unset, --execute creates Cloud SQL
+``tea-sessions``, deploys, then write/restart/check so taste profiles survive.
 
 Usage:
     uv run python scripts/deploy_cloud_run.py
@@ -21,6 +23,7 @@ from telegram_integration.deploy_spec import (
     ADK_APP_NAME,
     AGENT_SERVICE,
     CLOUD_RUN_REGION,
+    CLOUD_SQL_INSTANCE_NAME,
     DEFAULT_PROJECT,
     DEFAULT_SESSION_DB_NAME,
     DEFAULT_SESSION_DB_USER,
@@ -142,19 +145,41 @@ def _normalized_cloud_sql(project: str, region: str) -> tuple[str | None, str, s
     return instance or None, user, database
 
 
-def _require_session_backend() -> None:
-    """Cloud Run tea-agent crashes without Cloud SQL or Agent Engine sessions."""
-    engine_id, _engine_location = _agent_engine_env()
-    cloud_sql, _user, _database = _cloud_sql_env()
+def _load_setup_cloud_sql():
+    import importlib.util
+
+    path = ROOT / "scripts" / "setup_cloud_sql.py"
+    spec = importlib.util.spec_from_file_location("setup_cloud_sql", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit("scripts/setup_cloud_sql.py is missing")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _ensure_session_backend(
+    project: str, region: str, *, provision: bool
+) -> tuple[str | None, str | None, str | None, str, str]:
+    """Return engine_id, engine_location, cloud_sql, db user, db name.
+
+    --execute with no backend creates Cloud SQL ``tea-sessions`` so a restart
+    cannot silently drop Telegram taste profiles.
+    """
+    engine_id, engine_location = _agent_engine_env()
+    cloud_sql, user, database = _normalized_cloud_sql(project, region)
     if cloud_sql or engine_id:
-        return
+        return engine_id, engine_location, cloud_sql, user, database
+    if not provision:
+        return None, None, None, user, database
+    setup = _load_setup_cloud_sql()
+    instance_name = setup.CLOUD_SQL_INSTANCE_NAME
     print(
-        "Refusing to deploy: tea-agent on Cloud Run needs CLOUD_SQL_INSTANCE "
-        "or GOOGLE_CLOUD_AGENT_ENGINE_ID so taste profiles survive restarts.",
-        file=sys.stderr,
+        "No CLOUD_SQL_INSTANCE or GOOGLE_CLOUD_AGENT_ENGINE_ID in env; "
+        f"provisioning Cloud SQL {instance_name} for DatabaseSessionService."
     )
-    print("Provision: uv run python scripts/setup_cloud_sql.py --execute", file=sys.stderr)
-    raise SystemExit(2)
+    setup._execute(project, region, instance_name, user, database)
+    conn = setup.instance_connection_name(project, region, instance_name)
+    return engine_id, engine_location, conn, user, database
 
 
 def _print_plan(project: str, region: str) -> None:
@@ -177,11 +202,12 @@ def _print_plan(project: str, region: str) -> None:
     elif engine_id:
         print("  Sessions: Agent Engine (GOOGLE_CLOUD_AGENT_ENGINE_ID)")
     else:
+        cloud_sql = f"{project}:{region}:{CLOUD_SQL_INSTANCE_NAME}"
         print(
-            "  Sessions: Cloud Run will refuse in-memory; "
-            "set CLOUD_SQL_INSTANCE or GOOGLE_CLOUD_AGENT_ENGINE_ID"
+            f"  Sessions: --execute will CREATE Cloud SQL {CLOUD_SQL_INSTANCE_NAME} "
+            f"({cloud_sql}, POSTGRES_17, db-f1-micro, zonal), then deploy and verify"
         )
-        print("  Provision: uv run python scripts/setup_cloud_sql.py")
+        print(f"  Session DB: {session_user}@{session_db}")
     print()
     print(
         "1. gcloud",
@@ -371,15 +397,17 @@ def _verify_after_deploy(project: str, region: str, agent_url: str) -> None:
 
 
 def _execute(project: str, region: str, *, skip_verify: bool = False) -> None:
-    _require_session_backend()
     print(f"Using GCP project {project}")
     print(f"Cloud Run region {region}")
     _gcloud(["config", "set", "project", project])
     _gcloud(["config", "set", "run/region", region])
     _enable_apis(project)
     _grant_builder_role(project)
-    engine_id, engine_location = _agent_engine_env()
-    cloud_sql, session_user, session_db = _normalized_cloud_sql(project, region)
+    engine_id, engine_location, cloud_sql, session_user, session_db = (
+        _ensure_session_backend(project, region, provision=True)
+    )
+    if not cloud_sql and not engine_id:
+        _fail("Session backend missing after Cloud SQL provision")
     extra_secrets = ("SESSION_DB_PASSWORD",) if cloud_sql else ()
     _grant_secret_access(project, extra_secrets)
     if cloud_sql:

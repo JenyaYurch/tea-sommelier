@@ -155,29 +155,69 @@ def _load_deploy_module():
     return module
 
 
-def test_execute_refuses_cloud_run_without_session_backend(monkeypatch) -> None:
+def test_ensure_provisions_cloud_sql_when_backend_missing(monkeypatch) -> None:
     mod = _load_deploy_module()
-    monkeypatch.setattr(mod, "_agent_engine_env", lambda: (None, None))
-    monkeypatch.setattr(mod, "_cloud_sql_env", lambda: (None, "tea_agent", "tea_sessions"))
-    try:
-        mod._require_session_backend()
-        raised = False
-    except SystemExit as err:
-        raised = True
-        assert err.code == 2
-    assert raised
+    called: dict[str, tuple] = {}
 
+    class FakeSetup:
+        CLOUD_SQL_INSTANCE_NAME = "tea-sessions"
 
-def test_execute_allows_cloud_sql_or_agent_engine(monkeypatch) -> None:
-    mod = _load_deploy_module()
+        @staticmethod
+        def instance_connection_name(project, region, instance):
+            return f"{project}:{region}:{instance}"
+
+        @staticmethod
+        def _execute(project, region, instance, user, database):
+            called["args"] = (project, region, instance, user, database)
+
     monkeypatch.setattr(mod, "_agent_engine_env", lambda: (None, None))
     monkeypatch.setattr(
-        mod, "_cloud_sql_env", lambda: ("proj:europe-central2:tea-sessions", "tea_agent", "tea_sessions")
+        mod, "_cloud_sql_env", lambda: (None, "tea_agent", "tea_sessions")
     )
-    mod._require_session_backend()
+    monkeypatch.setattr(mod, "_load_setup_cloud_sql", lambda: FakeSetup)
+    engine_id, location, sql, user, database = mod._ensure_session_backend(
+        "demo-proj", "europe-central2", provision=True
+    )
+    assert engine_id is None
+    assert location is None
+    assert sql == "demo-proj:europe-central2:tea-sessions"
+    assert user == "tea_agent"
+    assert database == "tea_sessions"
+    assert called["args"] == (
+        "demo-proj",
+        "europe-central2",
+        "tea-sessions",
+        "tea_agent",
+        "tea_sessions",
+    )
+
+
+def test_ensure_does_not_provision_when_engine_or_sql_set(monkeypatch) -> None:
+    mod = _load_deploy_module()
+
+    def _boom():
+        raise AssertionError("must not provision Cloud SQL")
+
+    monkeypatch.setattr(mod, "_load_setup_cloud_sql", _boom)
+    monkeypatch.setattr(mod, "_agent_engine_env", lambda: (None, None))
+    monkeypatch.setattr(
+        mod,
+        "_cloud_sql_env",
+        lambda: ("proj:europe-central2:tea-sessions", "tea_agent", "tea_sessions"),
+    )
+    engine_id, _location, sql, _user, _database = mod._ensure_session_backend(
+        "proj", "europe-central2", provision=True
+    )
+    assert engine_id is None
+    assert sql == "proj:europe-central2:tea-sessions"
     monkeypatch.setattr(mod, "_cloud_sql_env", lambda: (None, "tea_agent", "tea_sessions"))
     monkeypatch.setattr(mod, "_agent_engine_env", lambda: ("engine-123", "eu"))
-    mod._require_session_backend()
+    engine_id, location, sql, _user, _database = mod._ensure_session_backend(
+        "proj", "europe-central2", provision=True
+    )
+    assert engine_id == "engine-123"
+    assert location == "eu"
+    assert sql is None
 
 
 def test_dry_run_plan_includes_write_restart_check(capsys, monkeypatch) -> None:
@@ -192,6 +232,20 @@ def test_dry_run_plan_includes_write_restart_check(capsys, monkeypatch) -> None:
     assert "--write" in out
     assert "TEA14_SESSION_PROBE" in out
     assert "--check" in out
+
+
+def test_dry_run_plan_says_execute_will_create_cloud_sql(capsys, monkeypatch) -> None:
+    mod = _load_deploy_module()
+    monkeypatch.setattr(mod, "_agent_engine_env", lambda: (None, None))
+    monkeypatch.setattr(
+        mod, "_cloud_sql_env", lambda: (None, "tea_agent", "tea_sessions")
+    )
+    mod._print_plan("demo-proj", "europe-central2")
+    out = capsys.readouterr().out
+    assert "will CREATE Cloud SQL tea-sessions" in out
+    assert "demo-proj:europe-central2:tea-sessions" in out
+    assert "--add-cloudsql-instances=demo-proj:europe-central2:tea-sessions" in out
+    assert "--write" in out
 
 
 def test_verify_after_deploy_writes_restarts_and_checks(monkeypatch) -> None:

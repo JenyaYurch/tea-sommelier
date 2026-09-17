@@ -89,7 +89,7 @@ uv run python scripts/deploy_cloud_run.py
 uv run python scripts/deploy_cloud_run.py --execute
 ```
 
-`--execute` deploys for real and then proves TEA-14: `verify_session_persistence.py --write`, a new `tea-agent` revision, then `--check`. Telegram taste profiles survive Cloud Run restarts with Cloud SQL (`CLOUD_SQL_INSTANCE` + Secret Manager `SESSION_DB_PASSWORD`) or Agent Engine sessions (`GOOGLE_CLOUD_AGENT_ENGINE_ID`). Cloud Run refuses in-memory and sqlite (container disk is ephemeral). Local polling defaults to `SESSION_SERVICE_URI=sqlite+aiosqlite:///./sessions.db`. Do not run local polling and the webhook at the same time (Telegram allows one getUpdates client).
+`--execute` provisions Cloud SQL `tea-sessions` if neither `CLOUD_SQL_INSTANCE` nor `GOOGLE_CLOUD_AGENT_ENGINE_ID` is set, deploys both services, then proves TEA-14: `verify_session_persistence.py --write`, a new `tea-agent` revision, then `--check`. Telegram taste profiles survive Cloud Run restarts with Cloud SQL (`SESSION_DB_PASSWORD` in Secret Manager) or Agent Engine sessions. Cloud Run refuses in-memory and sqlite (container disk is ephemeral). Local polling defaults to `SESSION_SERVICE_URI=sqlite+aiosqlite:///./sessions.db`. Do not run local polling and the webhook at the same time (Telegram allows one getUpdates client).
 
 ## Deployment
 
