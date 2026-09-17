@@ -21,6 +21,8 @@ from telegram_integration.deploy_spec import (
     AGENT_SERVICE,
     CLOUD_RUN_REGION,
     DEFAULT_PROJECT,
+    DEFAULT_SESSION_DB_NAME,
+    DEFAULT_SESSION_DB_USER,
     PLACEHOLDER_SERVICE_URL,
     TELEGRAM_SERVICE,
     agent_deploy_args,
@@ -36,8 +38,10 @@ REQUIRED_APIS = (
     "secretmanager.googleapis.com",
     "logging.googleapis.com",
     "storage.googleapis.com",
+    "sqladmin.googleapis.com",
 )
 SECRETS = ("GOOGLE_API_KEY", "TELEGRAM_BOT_TOKEN")
+CLOUD_SQL_CLIENT_ROLE = "roles/cloudsql.client"
 BUILDER_ROLE = "roles/run.builder"
 
 
@@ -108,8 +112,27 @@ def _agent_engine_env() -> tuple[str | None, str | None]:
     return engine_id or None, engine_location or None
 
 
+def _cloud_sql_env() -> tuple[str | None, str, str]:
+    env = _read_dotenv()
+    instance = (
+        os.environ.get("CLOUD_SQL_INSTANCE") or env.get("CLOUD_SQL_INSTANCE") or ""
+    ).strip()
+    user = (
+        os.environ.get("SESSION_DB_USER")
+        or env.get("SESSION_DB_USER")
+        or DEFAULT_SESSION_DB_USER
+    ).strip()
+    database = (
+        os.environ.get("SESSION_DB_NAME")
+        or env.get("SESSION_DB_NAME")
+        or DEFAULT_SESSION_DB_NAME
+    ).strip()
+    return instance or None, user, database
+
+
 def _print_plan(project: str, region: str) -> None:
     engine_id, engine_location = _agent_engine_env()
+    cloud_sql, session_user, session_db = _cloud_sql_env()
     print("Cloud Run two-stage plan (no secrets printed)")
     print(f"  project:  {project}")
     print(f"  region:   {region}")
@@ -120,6 +143,13 @@ def _print_plan(project: str, region: str) -> None:
         print(f"  Memory Bank engine: {engine_id}")
         if engine_location:
             print(f"  Memory Bank location: {engine_location}")
+    if cloud_sql:
+        print(f"  Cloud SQL sessions: {cloud_sql}")
+        print(f"  Session DB: {session_user}@{session_db}")
+        print("  SESSION_DB_PASSWORD from Secret Manager (not printed)")
+    else:
+        print("  Sessions: in-memory unless CLOUD_SQL_INSTANCE is set")
+        print("  Provision: uv run python scripts/setup_cloud_sql.py")
     print()
     print(
         "1. gcloud",
@@ -128,6 +158,9 @@ def _print_plan(project: str, region: str) -> None:
             region=region,
             agent_engine_id=engine_id,
             agent_engine_location=engine_location,
+            cloud_sql_instance=cloud_sql,
+            session_db_user=session_user,
+            session_db_name=session_db,
         ),
     )
     print()
@@ -202,9 +235,9 @@ def _grant_builder_role(project: str) -> None:
     print(f"Granted {BUILDER_ROLE} to compute default SA")
 
 
-def _grant_secret_access(project: str) -> None:
+def _grant_secret_access(project: str, extra: tuple[str, ...] = ()) -> None:
     member = f"serviceAccount:{_compute_sa(project)}"
-    for secret in SECRETS:
+    for secret in (*SECRETS, *extra):
         proc = _gcloud(
             [
                 "secrets",
@@ -218,6 +251,23 @@ def _grant_secret_access(project: str) -> None:
         )
         if proc.returncode != 0:
             _fail(f"Failed to grant secretAccessor on {secret}", proc)
+
+
+def _grant_cloudsql_client(project: str) -> None:
+    member = f"serviceAccount:{_compute_sa(project)}"
+    proc = _gcloud(
+        [
+            "projects",
+            "add-iam-policy-binding",
+            project,
+            f"--member={member}",
+            f"--role={CLOUD_SQL_CLIENT_ROLE}",
+            "--quiet",
+        ]
+    )
+    if proc.returncode != 0:
+        _fail(f"Failed to grant {CLOUD_SQL_CLIENT_ROLE}", proc)
+    print(f"Granted {CLOUD_SQL_CLIENT_ROLE} to compute default SA")
 
 
 def _run_step(label: str, args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -257,9 +307,13 @@ def _execute(project: str, region: str) -> None:
     _gcloud(["config", "set", "run/region", region])
     _enable_apis(project)
     _grant_builder_role(project)
-    _grant_secret_access(project)
-
     engine_id, engine_location = _agent_engine_env()
+    cloud_sql, session_user, session_db = _cloud_sql_env()
+    extra_secrets = ("SESSION_DB_PASSWORD",) if cloud_sql else ()
+    _grant_secret_access(project, extra_secrets)
+    if cloud_sql:
+        _grant_cloudsql_client(project)
+
     _run_step(
         "tea-agent",
         agent_deploy_args(
@@ -267,6 +321,9 @@ def _execute(project: str, region: str) -> None:
             region=region,
             agent_engine_id=engine_id,
             agent_engine_location=engine_location,
+            cloud_sql_instance=cloud_sql,
+            session_db_user=session_user,
+            session_db_name=session_db,
         ),
     )
     agent_url = _service_url(project, region, AGENT_SERVICE)

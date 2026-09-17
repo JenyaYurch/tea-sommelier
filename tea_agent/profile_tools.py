@@ -6,6 +6,14 @@ from typing import Any
 
 from google.adk.tools import ToolContext
 
+# ADK Cloud SQL codelab: ``user:`` keys survive new sessions for the same user_id.
+# Unprefixed copies keep the current session's interpolations filled.
+
+
+def _write_profile_key(state: Any, key: str, value: Any) -> None:
+    state[key] = value
+    state[f"user:{key}"] = value
+
 
 def save_taste_profile(
     experience: str,
@@ -42,6 +50,6 @@ def save_taste_profile(
         "liked_teas": liked,
     }
     for key, value in profile.items():
-        tool_context.state[key] = value
-    tool_context.state["profile_complete"] = True
+        _write_profile_key(tool_context.state, key, value)
+    _write_profile_key(tool_context.state, "profile_complete", True)
     return {"status": "success", "saved": profile}

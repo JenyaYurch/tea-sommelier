@@ -84,11 +84,12 @@ Production is two Cloud Run services (`tea-agent` + `telegram-integration`) in `
 
 ```bash
 uv run python scripts/setup_secret_manager.py
+uv run python scripts/setup_cloud_sql.py
 uv run python scripts/deploy_cloud_run.py
 uv run python scripts/deploy_cloud_run.py --execute
 ```
 
-`--execute` deploys for real. Do not run local polling and the webhook at the same time (Telegram allows one getUpdates client).
+`--execute` deploys for real. Cloud SQL is required for Telegram profiles to survive Cloud Run restarts (`CLOUD_SQL_INSTANCE` + Secret Manager `SESSION_DB_PASSWORD`). Local polling can use `SESSION_SERVICE_URI=sqlite+aiosqlite:///./sessions.db`. Do not run local polling and the webhook at the same time (Telegram allows one getUpdates client).
 
 ## Deployment
 

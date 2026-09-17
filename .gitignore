@@ -213,3 +213,8 @@ service-account*.json
 **/application_default_credentials.json
 .env.*
 !.env.example
+
+# Local ADK session sqlite (TEA-14)
+sessions.db
+*.sqlite
+*.sqlite3

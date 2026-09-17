@@ -7,7 +7,7 @@ authors = [
 ]
 
 dependencies = [
-    "google-adk[gcp,otel-gcp]>=2.2.0,<3.0.0",
+    "google-adk[gcp,otel-gcp,db]>=2.2.0,<3.0.0",
     "opentelemetry-resourcedetector-gcp<=1.12.0a0",
     "gcsfs>=2024.11.0",
     "a2a-sdk[http-server]~=0.3.22",
@@ -17,6 +17,8 @@ dependencies = [
     "httpx>=0.27.0,<1.0.0",
     "beautifulsoup4>=4.12.0,<5.0.0",
     "requests>=2.32.0,<3.0.0",
+    "asyncpg>=0.29.0,<1.0.0",
+    "aiosqlite>=0.20.0,<1.0.0",
 ]
 requires-python = ">=3.11,<3.14"
 
