@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
+from google.adk.events.event import Event
+from google.adk.events.event_actions import EventActions
 from google.adk.sessions.database_session_service import DatabaseSessionService
 from google.adk.sessions.in_memory_session_service import InMemorySessionService
+from google.adk.sessions.state import State
 
 from tea_agent.app_utils import services
 from tea_agent.app_utils.session_uri import CLOUD_RUN_SERVICE_ENV, LOCAL_SQLITE_URI
+from tea_agent.profile_tools import save_taste_profile
 from telegram_integration.keyboard import telegram_session_id, telegram_user_key
 
 
@@ -155,6 +160,53 @@ async def test_sqlite_session_survives_new_service_instance(tmp_path) -> None:
     assert loaded.id == session_id
     assert loaded.state.get("user:experience") == "новичок"
     assert loaded.state.get("experience") == "новичок"
+    assert loaded.state.get("user:profile_complete") is True
+
+
+@pytest.mark.asyncio
+async def test_save_taste_profile_event_survives_new_service_instance(tmp_path) -> None:
+    """Telegram writes the profile via tool_context.state → event state_delta."""
+    db = tmp_path / "sessions.db"
+    uri = f"sqlite+aiosqlite:///{db.resolve().as_posix()}"
+    user_id = telegram_user_key(5150)
+    session_id = telegram_session_id(5150)
+    first = DatabaseSessionService(db_url=uri)
+    session = await first.create_session(
+        app_name="tea_agent",
+        user_id=user_id,
+        session_id=session_id,
+    )
+    delta: dict = {}
+    save_taste_profile(
+        experience="новичок",
+        taste_profile="мягкий без горечи",
+        budget="",
+        caffeine_pref="низкий",
+        vessel="кружка",
+        liked_teas="Лунцзин",
+        tool_context=SimpleNamespace(state=State(dict(session.state), delta)),  # type: ignore[arg-type]
+    )
+    await first.append_event(
+        session,
+        Event(
+            invocation_id="inv-profile",
+            author="tea_sommelier",
+            actions=EventActions(state_delta=delta),
+        ),
+    )
+
+    restarted = DatabaseSessionService(db_url=uri)
+    loaded = await restarted.get_session(
+        app_name="tea_agent",
+        user_id=user_id,
+        session_id=session_id,
+    )
+    assert loaded is not None
+    assert loaded.id == session_id
+    assert loaded.state.get("user:experience") == "новичок"
+    assert loaded.state.get("experience") == "новичок"
+    assert loaded.state.get("user:taste_profile") == "мягкий без горечи"
+    assert loaded.state.get("user:liked_teas") == ["Лунцзин"]
     assert loaded.state.get("user:profile_complete") is True
 
 
