@@ -18,7 +18,13 @@ from urllib.parse import quote, urlparse
 LOCAL_SQLITE_URI = "sqlite+aiosqlite:///./sessions.db"
 DEFAULT_DB_USER = "tea_agent"
 DEFAULT_DB_NAME = "tea_sessions"
+DEFAULT_SOCKET_DIR = "/cloudsql"
 CLOUD_RUN_SERVICE_ENV = "K_SERVICE"
+
+
+def cloud_sql_socket_dir() -> str:
+    raw = (os.environ.get("CLOUD_SQL_SOCKET_DIR") or DEFAULT_SOCKET_DIR).strip()
+    return raw.rstrip("/") or DEFAULT_SOCKET_DIR
 
 
 def postgres_unix_uri(
@@ -27,6 +33,7 @@ def postgres_unix_uri(
     password: str,
     database: str,
     instance_connection_name: str,
+    socket_dir: str | None = None,
 ) -> str:
     """Unix-socket URI for Cloud Run ``--add-cloudsql-instances``.
 
@@ -35,11 +42,11 @@ def postgres_unix_uri(
     user_q = quote(user, safe="")
     password_q = quote(password, safe="")
     db_q = quote(database, safe="")
-    host = instance_connection_name.strip().lstrip("/")
-    if not host.startswith("cloudsql/"):
-        host = f"/cloudsql/{host}"
-    elif not host.startswith("/"):
-        host = f"/{host}"
+    root = (socket_dir or cloud_sql_socket_dir()).rstrip("/") or DEFAULT_SOCKET_DIR
+    instance = instance_connection_name.strip().lstrip("/")
+    if instance.startswith("cloudsql/"):
+        instance = instance.split("/", 1)[1]
+    host = f"{root}/{instance}"
     return f"postgresql+asyncpg://{user_q}:{password_q}@/{db_q}?host={host}"
 
 
