@@ -14,6 +14,7 @@ from tea_agent.app_utils.session_uri import (
     apply_local_sqlite_default,
     is_ephemeral_session_uri,
     missing_persistent_backend_error,
+    postgres_engine_kwargs,
     postgres_unix_uri,
     resolve_session_service_uri,
 )
@@ -124,6 +125,18 @@ def test_missing_persistent_backend_error_mentions_cloud_run() -> None:
     assert "CLOUD_SQL_INSTANCE" in str(err)
     assert "GOOGLE_CLOUD_AGENT_ENGINE_ID" in str(err)
     assert "sqlite" in str(err)
+
+
+def test_postgres_engine_kwargs_only_for_postgresql() -> None:
+    uri = "postgresql+asyncpg://tea_agent:x@/tea_sessions?host=/cloudsql/p:r:i"
+    assert postgres_engine_kwargs(uri) == {
+        "pool_size": 5,
+        "max_overflow": 2,
+        "pool_timeout": 30,
+        "pool_recycle": 1800,
+    }
+    assert postgres_engine_kwargs(LOCAL_SQLITE_URI) == {}
+    assert postgres_engine_kwargs("agentengine://projects/p/locations/eu/re/1") == {}
 
 
 def test_sqlite_uri_is_ephemeral_postgres_and_agent_engine_are_not() -> None:

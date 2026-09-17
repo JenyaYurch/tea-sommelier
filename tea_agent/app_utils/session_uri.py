@@ -95,6 +95,23 @@ def is_ephemeral_session_uri(uri: str) -> bool:
     return True
 
 
+def postgres_engine_kwargs(uri: str) -> dict[str, int]:
+    """Cloud Run / Cloud SQL pool settings for DatabaseSessionService.
+
+    ADK already sets pool_pre_ping for non-sqlite. Keep the pool small so
+    scale-out instances do not exhaust Cloud SQL connections.
+    """
+    scheme = (urlparse(uri).scheme or "").lower()
+    if not scheme.startswith("postgresql"):
+        return {}
+    return {
+        "pool_size": 5,
+        "max_overflow": 2,
+        "pool_timeout": 30,
+        "pool_recycle": 1800,
+    }
+
+
 def missing_persistent_backend_error() -> RuntimeError:
     return RuntimeError(
         "Cloud Run requires a persistent ADK session backend so Telegram taste "

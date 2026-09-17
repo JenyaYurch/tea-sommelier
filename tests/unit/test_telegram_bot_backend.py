@@ -42,8 +42,9 @@ def test_local_runner_applies_sqlite_default(monkeypatch) -> None:
 
     calls: list[str] = []
 
-    def fake_create(*, base_dir, session_service_uri):
+    def fake_create(*, base_dir, session_service_uri, session_db_kwargs=None, **kwargs):
         calls.append(session_service_uri)
+        assert session_db_kwargs is None
         return object()
 
     monkeypatch.delenv("SESSION_SERVICE_URI", raising=False)

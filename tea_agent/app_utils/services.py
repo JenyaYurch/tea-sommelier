@@ -25,7 +25,9 @@ Cloud Run refuses in-memory so a restart cannot silently drop taste profiles.
 
 from __future__ import annotations
 
+import asyncio
 import functools
+import logging
 import os
 
 from google.adk.artifacts import GcsArtifactService, InMemoryArtifactService
@@ -40,12 +42,15 @@ from tea_agent.app_utils.session_uri import (
     agent_engine_id_from_env,
     is_ephemeral_session_uri,
     missing_persistent_backend_error,
+    postgres_engine_kwargs,
     resolve_session_service_uri,
 )
 
 SESSION_SERVICE_URI = "shared://session"
 ARTIFACT_SERVICE_URI = "shared://artifact"
 MEMORY_SERVICE_URI = "shared://memory"
+_PREPARE_TABLE_ATTEMPTS = 8
+_log = logging.getLogger(__name__)
 
 _AGENT_DIR = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -58,8 +63,11 @@ def get_session_service():
     if uri := resolve_session_service_uri():
         if os.environ.get(CLOUD_RUN_SERVICE_ENV) and is_ephemeral_session_uri(uri):
             raise missing_persistent_backend_error()
+        kwargs = postgres_engine_kwargs(uri)
         return create_session_service_from_options(
-            base_dir=_AGENT_DIR, session_service_uri=uri
+            base_dir=_AGENT_DIR,
+            session_service_uri=uri,
+            session_db_kwargs=kwargs or None,
         )
     if agent_engine_id := agent_engine_id_from_env():
         from google.adk.sessions.vertex_ai_session_service import VertexAiSessionService
@@ -81,12 +89,45 @@ async def ensure_session_store_ready():
 
     ADK otherwise pays this on the first request. On Cloud Run a down Cloud SQL
     socket should fail the revision at startup instead of dropping profiles.
+    The unix socket can appear a moment after process start; retry connect errors.
     """
     service = get_session_service()
     prepare = getattr(service, "prepare_tables", None)
-    if callable(prepare):
-        await prepare()
-    return service
+    if not callable(prepare):
+        return service
+    last_error: BaseException | None = None
+    for attempt in range(1, _PREPARE_TABLE_ATTEMPTS + 1):
+        try:
+            await prepare()
+            return service
+        except Exception as err:
+            last_error = err
+            if attempt == _PREPARE_TABLE_ATTEMPTS or not _is_retryable_db_error(err):
+                raise
+            _log.warning(
+                "Session store not ready (attempt %s/%s): %s",
+                attempt,
+                _PREPARE_TABLE_ATTEMPTS,
+                err,
+            )
+            await asyncio.sleep(0.5 * attempt)
+    raise last_error  # pragma: no cover
+
+
+def _is_retryable_db_error(err: BaseException) -> bool:
+    text = str(err).lower()
+    needles = (
+        "connection refused",
+        "could not connect",
+        "connection does not exist",
+        "timeout",
+        "temporarily unavailable",
+        "the socket",
+        "no such file",
+    )
+    return isinstance(err, (ConnectionError, OSError, TimeoutError)) or any(
+        needle in text for needle in needles
+    )
 
 
 def _agent_engine_location() -> str | None:

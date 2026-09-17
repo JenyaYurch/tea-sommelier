@@ -13,7 +13,11 @@ from google.adk.sessions.in_memory_session_service import InMemorySessionService
 from google.adk.sessions.state import State
 
 from tea_agent.app_utils import services
-from tea_agent.app_utils.session_uri import CLOUD_RUN_SERVICE_ENV, LOCAL_SQLITE_URI
+from tea_agent.app_utils.session_uri import (
+    CLOUD_RUN_SERVICE_ENV,
+    LOCAL_SQLITE_URI,
+    postgres_engine_kwargs,
+)
 from tea_agent.profile_tools import save_taste_profile
 from telegram_integration.keyboard import telegram_session_id, telegram_user_key
 
@@ -30,6 +34,13 @@ def _clear_backends(monkeypatch) -> None:
     monkeypatch.delenv(CLOUD_RUN_SERVICE_ENV, raising=False)
 
 
+def test_retryable_db_errors() -> None:
+    assert services._is_retryable_db_error(ConnectionError("down"))
+    assert services._is_retryable_db_error(OSError("No such file or directory"))
+    assert services._is_retryable_db_error(RuntimeError("could not connect to server"))
+    assert not services._is_retryable_db_error(ValueError("invalid schema"))
+
+
 def test_default_session_service_is_in_memory(monkeypatch) -> None:
     _clear_backends(monkeypatch)
     _reset()
@@ -44,8 +55,9 @@ def test_default_session_service_is_in_memory(monkeypatch) -> None:
 def test_session_service_uses_uri_factory(monkeypatch) -> None:
     sentinel = object()
 
-    def fake_create(*, base_dir, session_service_uri):
+    def fake_create(*, base_dir, session_service_uri, session_db_kwargs=None, **kwargs):
         assert session_service_uri == "sqlite+aiosqlite:///./sessions.db"
+        assert session_db_kwargs is None
         return sentinel
 
     monkeypatch.setenv("SESSION_SERVICE_URI", "sqlite+aiosqlite:///./sessions.db")
@@ -114,8 +126,14 @@ def test_cloud_run_accepts_postgres_uri(monkeypatch) -> None:
     sentinel = object()
     uri = "postgresql+asyncpg://tea_agent:x@/tea_sessions?host=/cloudsql/p:r:i"
 
-    def fake_create(*, base_dir, session_service_uri):
+    def fake_create(*, base_dir, session_service_uri, session_db_kwargs=None, **kwargs):
         assert session_service_uri == uri
+        assert session_db_kwargs == {
+            "pool_size": 5,
+            "max_overflow": 2,
+            "pool_timeout": 30,
+            "pool_recycle": 1800,
+        }
         return sentinel
 
     _clear_backends(monkeypatch)
@@ -125,6 +143,72 @@ def test_cloud_run_accepts_postgres_uri(monkeypatch) -> None:
     _reset()
     try:
         assert services.get_session_service() is sentinel
+    finally:
+        _reset()
+
+
+@pytest.mark.asyncio
+async def test_ensure_session_store_ready_retries_connect_errors(monkeypatch) -> None:
+    prepared = {"n": 0}
+
+    class FakeService:
+        async def prepare_tables(self) -> None:
+            prepared["n"] += 1
+            if prepared["n"] < 3:
+                raise ConnectionError("connection refused")
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    _clear_backends(monkeypatch)
+    monkeypatch.setenv(
+        "SESSION_SERVICE_URI",
+        "postgresql+asyncpg://tea_agent:x@/tea_sessions?host=/cloudsql/p:r:i",
+    )
+    monkeypatch.setattr(
+        services,
+        "create_session_service_from_options",
+        lambda **kw: FakeService(),
+    )
+    monkeypatch.setattr(services.asyncio, "sleep", fake_sleep)
+    _reset()
+    try:
+        ready = await services.ensure_session_store_ready()
+        assert isinstance(ready, FakeService)
+        assert prepared["n"] == 3
+        assert sleeps == [0.5, 1.0]
+    finally:
+        _reset()
+
+
+@pytest.mark.asyncio
+async def test_ensure_session_store_ready_does_not_retry_schema_errors(
+    monkeypatch,
+) -> None:
+    prepared = {"n": 0}
+
+    class FakeService:
+        async def prepare_tables(self) -> None:
+            prepared["n"] += 1
+            raise ValueError("invalid schema")
+
+    _clear_backends(monkeypatch)
+    monkeypatch.setenv(
+        "SESSION_SERVICE_URI",
+        "postgresql+asyncpg://tea_agent:x@/tea_sessions?host=/cloudsql/p:r:i",
+    )
+    monkeypatch.setattr(
+        services,
+        "create_session_service_from_options",
+        lambda **kw: FakeService(),
+    )
+    _reset()
+    try:
+        with pytest.raises(ValueError, match="invalid schema"):
+            await services.ensure_session_store_ready()
+        assert prepared["n"] == 1
     finally:
         _reset()
 
@@ -284,7 +368,7 @@ async def test_postgres_unix_socket_session_survives_new_service_instance() -> N
     uri = _postgres_uri_or_skip()
     user_id = telegram_user_key(880014)
     session_id = telegram_session_id(880014)
-    first = DatabaseSessionService(db_url=uri)
+    first = DatabaseSessionService(db_url=uri, **postgres_engine_kwargs(uri))
     try:
         await first.delete_session(
             app_name="tea_agent", user_id=user_id, session_id=session_id
@@ -307,7 +391,7 @@ async def test_postgres_unix_socket_session_survives_new_service_instance() -> N
         pytest.skip(f"postgres unavailable: {err}")
     assert created.id == session_id
 
-    restarted = DatabaseSessionService(db_url=uri)
+    restarted = DatabaseSessionService(db_url=uri, **postgres_engine_kwargs(uri))
     loaded = await restarted.get_session(
         app_name="tea_agent",
         user_id=user_id,
@@ -327,3 +411,44 @@ async def test_postgres_unix_socket_session_survives_new_service_instance() -> N
         session_id=telegram_session_id(880015),
     )
     assert missing is None
+
+
+@pytest.mark.asyncio
+async def test_get_session_service_postgres_unix_socket_with_pool(monkeypatch) -> None:
+    """Cloud Run factory path: URI + session_db_kwargs + prepare_tables."""
+    uri = _postgres_uri_or_skip()
+    user_id = telegram_user_key(880114)
+    session_id = telegram_session_id(880114)
+    _clear_backends(monkeypatch)
+    monkeypatch.setenv("SESSION_SERVICE_URI", uri)
+    _reset()
+    try:
+        service = await services.ensure_session_store_ready()
+        assert isinstance(service, DatabaseSessionService)
+        try:
+            await service.delete_session(
+                app_name="tea_agent", user_id=user_id, session_id=session_id
+            )
+        except Exception:
+            pass
+        created = await service.create_session(
+            app_name="tea_agent",
+            user_id=user_id,
+            session_id=session_id,
+            state={
+                "experience": "новичок",
+                "user:experience": "новичок",
+                "user:profile_complete": True,
+            },
+        )
+        assert created.id == session_id
+        loaded = await service.get_session(
+            app_name="tea_agent",
+            user_id=user_id,
+            session_id=session_id,
+        )
+        assert loaded is not None
+        assert loaded.state.get("user:experience") == "новичок"
+        assert loaded.state.get("user:profile_complete") is True
+    finally:
+        _reset()
