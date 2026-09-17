@@ -36,10 +36,11 @@ def test_resolve_builds_cloud_sql_uri_from_parts(monkeypatch) -> None:
     monkeypatch.setenv("CLOUD_SQL_INSTANCE", "demo:europe-central2:tea-sessions")
     monkeypatch.setenv("SESSION_DB_USER", "tea_agent")
     monkeypatch.setenv("SESSION_DB_NAME", "tea_sessions")
-    monkeypatch.setenv("SESSION_DB_PASSWORD", "s3cret")
+    monkeypatch.setenv("SESSION_DB_PASSWORD", "p@ss/w")
     uri = resolve_session_service_uri()
     assert uri is not None
-    assert "s3cret" not in uri
+    assert "p@ss/w" not in uri
+    assert "tea_agent" in uri
     assert "host=/cloudsql/demo:europe-central2:tea-sessions" in uri
 
 
