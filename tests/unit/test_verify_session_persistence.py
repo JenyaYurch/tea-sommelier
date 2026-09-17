@@ -56,3 +56,54 @@ def test_check_profile_rejects_missing_user_experience(monkeypatch) -> None:
     monkeypatch.setattr(mod.httpx, "Client", FakeClient)
     with pytest.raises(SystemExit, match="user:experience not restored"):
         mod.check_profile("https://tea-agent.example/apps/x")
+
+
+def test_write_profile_patches_existing_empty_session(monkeypatch) -> None:
+    """Telegram ensure_session POSTs {} first; --write must still store user: keys."""
+    mod = _load()
+    calls: list[tuple[str, object]] = []
+
+    class FakeResponse:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = ""
+
+        def json(self):
+            return self._payload
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url):
+            calls.append(("GET", None))
+            return FakeResponse(200, {"id": "tg-sess-140014", "state": {}})
+
+        def patch(self, url, json=None):
+            calls.append(("PATCH", json))
+            return FakeResponse(
+                200,
+                {
+                    "id": "tg-sess-140014",
+                    "userId": "tg-140014",
+                    "state": json["state_delta"],
+                },
+            )
+
+        def post(self, url, json=None):
+            calls.append(("POST", json))
+            raise AssertionError("must not recreate an existing session")
+
+    monkeypatch.setattr(mod.httpx, "Client", FakeClient)
+    body = mod.write_profile("https://tea-agent.example/apps/x")
+    assert calls[0][0] == "GET"
+    assert calls[1] == ("PATCH", {"state_delta": mod.PROFILE})
+    assert body["state"]["user:experience"] == "новичок"
+    assert not any(method == "POST" for method, _ in calls)

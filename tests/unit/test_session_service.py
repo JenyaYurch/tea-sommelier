@@ -130,6 +130,33 @@ def test_cloud_run_accepts_postgres_uri(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_ensure_session_store_ready_prepares_tables(monkeypatch) -> None:
+    prepared = {"n": 0}
+
+    class FakeService:
+        async def prepare_tables(self) -> None:
+            prepared["n"] += 1
+
+    _clear_backends(monkeypatch)
+    monkeypatch.setenv(
+        "SESSION_SERVICE_URI",
+        "postgresql+asyncpg://tea_agent:x@/tea_sessions?host=/cloudsql/p:r:i",
+    )
+    monkeypatch.setattr(
+        services,
+        "create_session_service_from_options",
+        lambda **kw: FakeService(),
+    )
+    _reset()
+    try:
+        ready = await services.ensure_session_store_ready()
+        assert isinstance(ready, FakeService)
+        assert prepared["n"] == 1
+    finally:
+        _reset()
+
+
+@pytest.mark.asyncio
 async def test_sqlite_session_survives_new_service_instance(tmp_path) -> None:
     db = tmp_path / "sessions.db"
     uri = f"sqlite+aiosqlite:///{db.resolve().as_posix()}"

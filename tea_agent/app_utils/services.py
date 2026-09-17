@@ -76,6 +76,19 @@ def get_session_service():
     return InMemorySessionService()
 
 
+async def ensure_session_store_ready():
+    """Create DatabaseSessionService tables before the first Telegram /run.
+
+    ADK otherwise pays this on the first request. On Cloud Run a down Cloud SQL
+    socket should fail the revision at startup instead of dropping profiles.
+    """
+    service = get_session_service()
+    prepare = getattr(service, "prepare_tables", None)
+    if callable(prepare):
+        await prepare()
+    return service
+
+
 def _agent_engine_location() -> str | None:
     return (
         os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_LOCATION")

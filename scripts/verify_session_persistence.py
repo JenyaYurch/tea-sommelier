@@ -37,15 +37,33 @@ def session_url(base_url: str, telegram_user_id: int, app_name: str = DEFAULT_AP
     return f"{base}/apps/{app_name}/users/{user_id}/sessions/{session_id}"
 
 
+def _patch_profile(client: httpx.Client, url: str) -> dict:
+    patched = client.patch(url, json={"state_delta": PROFILE})
+    if patched.status_code not in {200, 201}:
+        raise SystemExit(f"patch failed: {patched.status_code} {patched.text[:300]}")
+    return patched.json()
+
+
 def write_profile(url: str) -> dict:
+    """Create or update the probe session so --write is not a no-op.
+
+    Telegram webhook ``ensure_session`` POSTs ``{}`` first. A GET 200 empty
+    session must still receive ``user:`` keys via ADK PATCH state_delta.
+    """
     with httpx.Client(timeout=20.0) as client:
         existing = client.get(url)
         if existing.status_code == 200:
-            return existing.json()
+            return _patch_profile(client, url)
         created = client.post(url, json=PROFILE)
+        if created.status_code == 409:
+            return _patch_profile(client, url)
         if created.status_code not in {200, 201}:
             raise SystemExit(f"write failed: {created.status_code} {created.text[:300]}")
-        return created.json()
+        body = created.json()
+        state = body.get("state") or {}
+        if state.get("user:experience") != PROFILE["user:experience"]:
+            return _patch_profile(client, url)
+        return body
 
 
 def check_profile(url: str) -> dict:

@@ -255,3 +255,35 @@ def test_verify_script_survives_cloud_run_shaped_restart(server_port: int) -> No
         assert "profile missing after restart" in missing.stderr + missing.stdout
     finally:
         _stop(restarted)
+
+
+def test_verify_script_patches_empty_existing_session(
+    sqlite_uri: str, server_port: int
+) -> None:
+    """Telegram ensure_session POSTs {} first; --write must still persist user: keys."""
+    extra_env = {"SESSION_SERVICE_URI": sqlite_uri}
+    base = f"http://127.0.0.1:{server_port}"
+    user_id = telegram_user_key(140014)
+    session_id = telegram_session_id(140014)
+    session_url = f"{base}/apps/{APP_NAME}/users/{user_id}/sessions/{session_id}"
+    first = _start_server(server_port, extra_env)
+    try:
+        _wait_ready(base, first)
+        created = httpx.post(session_url, json={}, timeout=15.0)
+        assert created.status_code in {200, 201}, created.text
+        assert not (created.json().get("state") or {}).get("user:experience")
+        written = _verify_cli("--base-url", base, "--write")
+        assert written.returncode == 0, written.stderr + written.stdout
+    except Exception:
+        _stop(first)
+        raise
+    _stop(first)
+
+    restarted = _start_server(server_port, extra_env)
+    try:
+        _wait_ready(base, restarted)
+        checked = _verify_cli("--base-url", base, "--check")
+        assert checked.returncode == 0, checked.stderr + checked.stdout
+        assert "still has user:experience" in checked.stdout
+    finally:
+        _stop(restarted)
