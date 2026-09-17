@@ -203,3 +203,55 @@ def test_cloud_run_entrypoint_refuses_sqlite(sqlite_uri: str, server_port: int) 
     combined = stderr + (proc.stdout.read() if proc.stdout else "")
     assert proc.returncode != 0
     assert "sqlite is ephemeral" in combined or "persistent ADK session backend" in combined
+
+
+def _verify_cli(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "verify_session_persistence.py"), *args],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_verify_script_survives_cloud_run_shaped_restart(server_port: int) -> None:
+    """The post-deploy CLI against K_SERVICE + Cloud SQL unix socket."""
+    _require_cloud_sql_like_socket()
+    extra_env = {
+        "K_SERVICE": "tea-agent",
+        "CLOUD_SQL_INSTANCE": CLOUD_SQL_LIKE_INSTANCE,
+        "CLOUD_SQL_SOCKET_DIR": str(CLOUD_SQL_LIKE_ROOT),
+        "SESSION_DB_USER": "tea_agent",
+        "SESSION_DB_NAME": "tea_sessions",
+        "SESSION_DB_PASSWORD": "tea_test_pass",
+    }
+    base = f"http://127.0.0.1:{server_port}"
+    first = _start_server(server_port, extra_env)
+    try:
+        _wait_ready(base, first)
+        written = _verify_cli("--base-url", base, "--write")
+        assert written.returncode == 0, written.stderr + written.stdout
+        assert "tg-sess-140014" in written.stdout
+        assert "tg-140014" in written.stdout
+    except Exception:
+        _stop(first)
+        raise
+    _stop(first)
+
+    restarted = _start_server(server_port, extra_env)
+    try:
+        _wait_ready(base, restarted)
+        checked = _verify_cli("--base-url", base, "--check")
+        assert checked.returncode == 0, checked.stderr + checked.stdout
+        assert "still has user:experience" in checked.stdout
+        missing = _verify_cli(
+            "--base-url",
+            base,
+            "--telegram-user-id",
+            "140015",
+            "--check",
+        )
+        assert missing.returncode != 0
+        assert "profile missing after restart" in missing.stderr + missing.stdout
+    finally:
+        _stop(restarted)
