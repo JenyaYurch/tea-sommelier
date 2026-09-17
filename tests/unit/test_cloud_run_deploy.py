@@ -114,3 +114,39 @@ def test_dockerignore_keeps_env_out_of_image() -> None:
     text = (ROOT / ".dockerignore").read_text(encoding="utf-8")
     assert ".env" in text
     assert ".venv" in text
+
+
+def _load_deploy_module():
+    import importlib.util
+
+    path = ROOT / "scripts" / "deploy_cloud_run.py"
+    spec = importlib.util.spec_from_file_location("deploy_cloud_run", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_execute_refuses_cloud_run_without_session_backend(monkeypatch) -> None:
+    mod = _load_deploy_module()
+    monkeypatch.setattr(mod, "_agent_engine_env", lambda: (None, None))
+    monkeypatch.setattr(mod, "_cloud_sql_env", lambda: (None, "tea_agent", "tea_sessions"))
+    try:
+        mod._require_session_backend()
+        raised = False
+    except SystemExit as err:
+        raised = True
+        assert err.code == 2
+    assert raised
+
+
+def test_execute_allows_cloud_sql_or_agent_engine(monkeypatch) -> None:
+    mod = _load_deploy_module()
+    monkeypatch.setattr(mod, "_agent_engine_env", lambda: (None, None))
+    monkeypatch.setattr(
+        mod, "_cloud_sql_env", lambda: ("proj:europe-central2:tea-sessions", "tea_agent", "tea_sessions")
+    )
+    mod._require_session_backend()
+    monkeypatch.setattr(mod, "_cloud_sql_env", lambda: (None, "tea_agent", "tea_sessions"))
+    monkeypatch.setattr(mod, "_agent_engine_env", lambda: ("engine-123", "eu"))
+    mod._require_session_backend()

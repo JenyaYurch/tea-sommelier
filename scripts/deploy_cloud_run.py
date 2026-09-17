@@ -130,6 +130,21 @@ def _cloud_sql_env() -> tuple[str | None, str, str]:
     return instance or None, user, database
 
 
+def _require_session_backend() -> None:
+    """Cloud Run tea-agent crashes without Cloud SQL or Agent Engine sessions."""
+    engine_id, _engine_location = _agent_engine_env()
+    cloud_sql, _user, _database = _cloud_sql_env()
+    if cloud_sql or engine_id:
+        return
+    print(
+        "Refusing to deploy: tea-agent on Cloud Run needs CLOUD_SQL_INSTANCE "
+        "or GOOGLE_CLOUD_AGENT_ENGINE_ID so taste profiles survive restarts.",
+        file=sys.stderr,
+    )
+    print("Provision: uv run python scripts/setup_cloud_sql.py --execute", file=sys.stderr)
+    raise SystemExit(2)
+
+
 def _print_plan(project: str, region: str) -> None:
     engine_id, engine_location = _agent_engine_env()
     cloud_sql, session_user, session_db = _cloud_sql_env()
@@ -306,6 +321,7 @@ def _service_url(project: str, region: str, service: str) -> str:
 
 
 def _execute(project: str, region: str) -> None:
+    _require_session_backend()
     print(f"Using GCP project {project}")
     print(f"Cloud Run region {region}")
     _gcloud(["config", "set", "project", project])
