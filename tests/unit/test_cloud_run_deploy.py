@@ -283,8 +283,12 @@ def test_dry_run_plan_verifies_tea_agent_before_telegram(capsys, monkeypatch) ->
     )
     mod._print_plan("demo-proj", "europe-central2")
     out = capsys.readouterr().out
-    assert out.index("--write") < out.index("telegram-integration")
-    assert out.index("--check") < out.index("telegram-integration")
+    assert out.index("verify_session_persistence.py --write") < out.index(
+        "gcloud run deploy telegram-integration"
+    )
+    assert out.index("verify_session_persistence.py --check") < out.index(
+        "gcloud run deploy telegram-integration"
+    )
 
 
 def test_execute_verifies_tea_agent_before_telegram(monkeypatch) -> None:
