@@ -59,6 +59,19 @@ def test_resolve_builds_cloud_sql_uri_from_parts(monkeypatch) -> None:
     assert "host=/cloudsql/demo:europe-central2:tea-sessions" in uri
 
 
+def test_resolve_honors_cloud_sql_socket_dir(monkeypatch) -> None:
+    monkeypatch.delenv("SESSION_SERVICE_URI", raising=False)
+    monkeypatch.setenv("CLOUD_SQL_INSTANCE", "demo-proj:europe-central2:tea-sessions")
+    monkeypatch.setenv("SESSION_DB_PASSWORD", "p@ss/w")
+    monkeypatch.setenv("CLOUD_SQL_SOCKET_DIR", "/tmp/cloudsql")
+    uri = resolve_session_service_uri()
+    assert uri is not None
+    assert (
+        "host=/tmp/cloudsql/demo-proj:europe-central2:tea-sessions" in uri
+    )
+    assert "/cloudsql/demo-proj" not in uri.replace("/tmp/cloudsql", "")
+
+
 def test_resolve_requires_password_when_instance_set(monkeypatch) -> None:
     monkeypatch.delenv("SESSION_SERVICE_URI", raising=False)
     monkeypatch.setenv("CLOUD_SQL_INSTANCE", "demo:europe-central2:tea-sessions")
