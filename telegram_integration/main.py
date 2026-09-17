@@ -102,6 +102,10 @@ def _build_local_runner():
 
     from tea_agent.agent import app as adk_app
     from tea_agent.app_utils import services
+    from tea_agent.app_utils.session_uri import apply_local_sqlite_default
+
+    apply_local_sqlite_default()
+    services.get_session_service.cache_clear()
 
     return Runner(
         app=adk_app,

@@ -36,12 +36,18 @@ _MAX_BUY_BUTTONS = 3
 
 def telegram_user_key(telegram_user_id: int) -> str:
     """ADK user_id for a Telegram account (stable across messages and callbacks)."""
-    return f"tg_{int(telegram_user_id)}"
+    return f"tg-{int(telegram_user_id)}"
 
 
 def telegram_session_id(telegram_user_id: int) -> str:
-    """ADK session_id for a Telegram account. Callbacks must reuse this."""
-    return f"tg_sess_{int(telegram_user_id)}"
+    """ADK session_id for a Telegram account. Callbacks must reuse this.
+
+    Agent Platform custom session ids allow ``[a-z0-9-]`` only (no underscores).
+    """
+    session_id = f"tg-sess-{int(telegram_user_id)}"
+    if not re.fullmatch(r"[a-z][a-z0-9-]{0,61}[a-z0-9]", session_id):
+        raise ValueError(f"session_id is not Agent Engine compatible: {session_id}")
+    return session_id
 
 
 def action_callback_data(label: str) -> str:

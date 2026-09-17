@@ -147,8 +147,13 @@ def _print_plan(project: str, region: str) -> None:
         print(f"  Cloud SQL sessions: {cloud_sql}")
         print(f"  Session DB: {session_user}@{session_db}")
         print("  SESSION_DB_PASSWORD from Secret Manager (not printed)")
+    elif engine_id:
+        print("  Sessions: Agent Engine (GOOGLE_CLOUD_AGENT_ENGINE_ID)")
     else:
-        print("  Sessions: in-memory unless CLOUD_SQL_INSTANCE is set")
+        print(
+            "  Sessions: Cloud Run will refuse in-memory; "
+            "set CLOUD_SQL_INSTANCE or GOOGLE_CLOUD_AGENT_ENGINE_ID"
+        )
         print("  Provision: uv run python scripts/setup_cloud_sql.py")
     print()
     print(

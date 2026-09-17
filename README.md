@@ -89,7 +89,7 @@ uv run python scripts/deploy_cloud_run.py
 uv run python scripts/deploy_cloud_run.py --execute
 ```
 
-`--execute` deploys for real. Cloud SQL is required for Telegram profiles to survive Cloud Run restarts (`CLOUD_SQL_INSTANCE` + Secret Manager `SESSION_DB_PASSWORD`). Local polling can use `SESSION_SERVICE_URI=sqlite+aiosqlite:///./sessions.db`. Do not run local polling and the webhook at the same time (Telegram allows one getUpdates client).
+`--execute` deploys for real. Telegram taste profiles survive Cloud Run restarts with Cloud SQL (`CLOUD_SQL_INSTANCE` + Secret Manager `SESSION_DB_PASSWORD`) or Agent Engine sessions (`GOOGLE_CLOUD_AGENT_ENGINE_ID`). Cloud Run refuses in-memory sessions. Local polling defaults to `SESSION_SERVICE_URI=sqlite+aiosqlite:///./sessions.db`. Do not run local polling and the webhook at the same time (Telegram allows one getUpdates client).
 
 ## Deployment
 
