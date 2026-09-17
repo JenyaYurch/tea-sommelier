@@ -19,6 +19,7 @@ LOCAL_SQLITE_URI = "sqlite+aiosqlite:///./sessions.db"
 DEFAULT_DB_USER = "tea_agent"
 DEFAULT_DB_NAME = "tea_sessions"
 DEFAULT_SOCKET_DIR = "/cloudsql"
+DEFAULT_CLOUD_SQL_REGION = "europe-central2"
 CLOUD_RUN_SERVICE_ENV = "K_SERVICE"
 
 
@@ -50,8 +51,30 @@ def postgres_unix_uri(
     return f"postgresql+asyncpg://{user_q}:{password_q}@/{db_q}?host={host}"
 
 
+def normalize_cloud_sql_instance(
+    instance: str,
+    *,
+    project: str | None = None,
+    region: str | None = None,
+) -> str:
+    """Expand ``tea-sessions`` to ``PROJECT:REGION:tea-sessions`` for unix sockets."""
+    value = (instance or "").strip()
+    if not value or value.count(":") >= 2:
+        return value
+    project_id = (project or os.environ.get("GOOGLE_CLOUD_PROJECT") or "").strip()
+    region_id = (
+        region
+        or os.environ.get("CLOUD_SQL_REGION")
+        or os.environ.get("CLOUD_RUN_REGION")
+        or DEFAULT_CLOUD_SQL_REGION
+    ).strip()
+    if not project_id:
+        return value
+    return f"{project_id}:{region_id}:{value}"
+
+
 def cloud_sql_instance_from_env() -> str:
-    return (os.environ.get("CLOUD_SQL_INSTANCE") or "").strip()
+    return normalize_cloud_sql_instance(os.environ.get("CLOUD_SQL_INSTANCE") or "")
 
 
 def agent_engine_id_from_env() -> str:

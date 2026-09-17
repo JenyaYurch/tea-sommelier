@@ -12,6 +12,7 @@ from telegram_integration.deploy_spec import (
     TELEGRAM_COMMAND,
     TELEGRAM_SERVICE,
     agent_deploy_args,
+    agent_restart_args,
     is_webhook_mode,
     telegram_deploy_args,
     telegram_update_env_args,
@@ -104,6 +105,33 @@ def test_agent_deploy_adds_cloud_sql_socket_without_db_password() -> None:
     assert "@/" not in joined
 
 
+def test_agent_deploy_expands_short_cloud_sql_instance_name() -> None:
+    args = agent_deploy_args(
+        project="demo-proj",
+        cloud_sql_instance="tea-sessions",
+        session_db_user="tea_agent",
+        session_db_name="tea_sessions",
+    )
+    joined = " ".join(args)
+    assert "--add-cloudsql-instances=demo-proj:europe-central2:tea-sessions" in args
+    env = next(item for item in args if item.startswith("--set-env-vars="))
+    assert "CLOUD_SQL_INSTANCE=demo-proj:europe-central2:tea-sessions" in env
+    assert "CLOUD_SQL_INSTANCE=tea-sessions," not in env
+    assert "SESSION_DB_PASSWORD=SESSION_DB_PASSWORD:latest" in joined
+
+
+def test_agent_restart_args_force_new_revision_without_secrets() -> None:
+    args = agent_restart_args(
+        project="demo-proj",
+        probe="1700000000",
+    )
+    joined = " ".join(args)
+    assert AGENT_SERVICE in args
+    assert "--update-env-vars=TEA14_SESSION_PROBE=1700000000" in args
+    assert "PASSWORD" not in joined
+    assert "postgresql+" not in joined
+
+
 def test_agent_dockerfile_copies_catalog_data() -> None:
     text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert "COPY ./data ./data" in text
@@ -150,3 +178,36 @@ def test_execute_allows_cloud_sql_or_agent_engine(monkeypatch) -> None:
     monkeypatch.setattr(mod, "_cloud_sql_env", lambda: (None, "tea_agent", "tea_sessions"))
     monkeypatch.setattr(mod, "_agent_engine_env", lambda: ("engine-123", "eu"))
     mod._require_session_backend()
+
+
+def test_dry_run_plan_includes_write_restart_check(capsys, monkeypatch) -> None:
+    mod = _load_deploy_module()
+    monkeypatch.setattr(mod, "_agent_engine_env", lambda: (None, None))
+    monkeypatch.setattr(
+        mod, "_cloud_sql_env", lambda: ("tea-sessions", "tea_agent", "tea_sessions")
+    )
+    mod._print_plan("demo-proj", "europe-central2")
+    out = capsys.readouterr().out
+    assert "demo-proj:europe-central2:tea-sessions" in out
+    assert "--write" in out
+    assert "TEA14_SESSION_PROBE" in out
+    assert "--check" in out
+
+
+def test_verify_after_deploy_writes_restarts_and_checks(monkeypatch) -> None:
+    mod = _load_deploy_module()
+    calls: list[object] = []
+    monkeypatch.setattr(
+        mod, "_verify_cli", lambda url, *flags: calls.append((url, flags))
+    )
+    monkeypatch.setattr(
+        mod, "_run_step", lambda label, args: calls.append((label, args))
+    )
+    monkeypatch.setattr(mod.time, "time", lambda: 1700000000)
+    mod._verify_after_deploy(
+        "demo-proj", "europe-central2", "https://tea-agent.example"
+    )
+    assert calls[0] == ("https://tea-agent.example", ("--write",))
+    assert calls[1][0] == "restart tea-agent (new revision)"
+    assert "--update-env-vars=TEA14_SESSION_PROBE=1700000000" in calls[1][1]
+    assert calls[2] == ("https://tea-agent.example", ("--check",))

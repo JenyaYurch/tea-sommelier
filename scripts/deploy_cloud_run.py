@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from telegram_integration.deploy_spec import (
@@ -26,9 +27,11 @@ from telegram_integration.deploy_spec import (
     PLACEHOLDER_SERVICE_URL,
     TELEGRAM_SERVICE,
     agent_deploy_args,
+    agent_restart_args,
     telegram_deploy_args,
     telegram_update_env_args,
 )
+from tea_agent.app_utils.session_uri import normalize_cloud_sql_instance
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_APIS = (
@@ -130,6 +133,15 @@ def _cloud_sql_env() -> tuple[str | None, str, str]:
     return instance or None, user, database
 
 
+def _normalized_cloud_sql(project: str, region: str) -> tuple[str | None, str, str]:
+    instance, user, database = _cloud_sql_env()
+    if instance:
+        instance = normalize_cloud_sql_instance(
+            instance, project=project, region=region
+        )
+    return instance or None, user, database
+
+
 def _require_session_backend() -> None:
     """Cloud Run tea-agent crashes without Cloud SQL or Agent Engine sessions."""
     engine_id, _engine_location = _agent_engine_env()
@@ -147,7 +159,7 @@ def _require_session_backend() -> None:
 
 def _print_plan(project: str, region: str) -> None:
     engine_id, engine_location = _agent_engine_env()
-    cloud_sql, session_user, session_db = _cloud_sql_env()
+    cloud_sql, session_user, session_db = _normalized_cloud_sql(project, region)
     print("Cloud Run two-stage plan (no secrets printed)")
     print(f"  project:  {project}")
     print(f"  region:   {region}")
@@ -203,6 +215,10 @@ def _print_plan(project: str, region: str) -> None:
             service_url="https://<telegram-integration-url>",
         ),
     )
+    print()
+    print("4. verify_session_persistence.py --write against tea-agent URL")
+    print("5. gcloud", *agent_restart_args(project=project, region=region, probe="<ts>"))
+    print("6. verify_session_persistence.py --check after the new revision")
     print()
     print("Dry-run only. Pass --execute after explicit approval to deploy.")
 
@@ -320,7 +336,41 @@ def _service_url(project: str, region: str, service: str) -> str:
     return url
 
 
-def _execute(project: str, region: str) -> None:
+def _verify_cli(agent_url: str, *flags: str) -> None:
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "verify_session_persistence.py"),
+            "--base-url",
+            agent_url,
+            *flags,
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if proc.stdout.strip():
+        print(proc.stdout.strip())
+    if proc.returncode != 0:
+        _fail("Session persistence verify failed", proc)
+
+
+def _verify_after_deploy(project: str, region: str, agent_url: str) -> None:
+    """Write a Telegram-shaped profile, replace the revision, then check it."""
+    print("TEA-14: writing probe session")
+    _verify_cli(agent_url, "--write")
+    probe = str(int(time.time()))
+    _run_step(
+        "restart tea-agent (new revision)",
+        agent_restart_args(project=project, region=region, probe=probe),
+    )
+    print("TEA-14: checking probe session after revision")
+    _verify_cli(agent_url, "--check")
+    print("TEA-14: taste profile survived Cloud Run revision restart")
+
+
+def _execute(project: str, region: str, *, skip_verify: bool = False) -> None:
     _require_session_backend()
     print(f"Using GCP project {project}")
     print(f"Cloud Run region {region}")
@@ -329,7 +379,7 @@ def _execute(project: str, region: str) -> None:
     _enable_apis(project)
     _grant_builder_role(project)
     engine_id, engine_location = _agent_engine_env()
-    cloud_sql, session_user, session_db = _cloud_sql_env()
+    cloud_sql, session_user, session_db = _normalized_cloud_sql(project, region)
     extra_secrets = ("SESSION_DB_PASSWORD",) if cloud_sql else ()
     _grant_secret_access(project, extra_secrets)
     if cloud_sql:
@@ -373,6 +423,10 @@ def _execute(project: str, region: str) -> None:
     )
     print("Deploy finished. Webhook path is <SERVICE_URL>/<TELEGRAM_BOT_TOKEN>.")
     print("Send /start in Telegram. Do not run local polling at the same time.")
+    if skip_verify:
+        print("Skipping TEA-14 session verify (--skip-verify).")
+        return
+    _verify_after_deploy(project, region, agent_url)
 
 
 def main() -> None:
@@ -384,12 +438,17 @@ def main() -> None:
         action="store_true",
         help="Actually deploy. Default is dry-run.",
     )
+    parser.add_argument(
+        "--skip-verify",
+        action="store_true",
+        help="Do not write/restart/check a probe session after --execute.",
+    )
     args = parser.parse_args()
     project = _project_id(args.project)
     if not args.execute:
         _print_plan(project, args.region)
         return
-    _execute(project, args.region)
+    _execute(project, args.region, skip_verify=args.skip_verify)
 
 
 if __name__ == "__main__":

@@ -46,7 +46,14 @@ def test_resolve_prefers_explicit_session_service_uri(monkeypatch) -> None:
     assert resolve_session_service_uri() == LOCAL_SQLITE_URI
 
 
-def test_resolve_builds_cloud_sql_uri_from_parts(monkeypatch) -> None:
+def test_resolve_expands_short_cloud_sql_instance_name(monkeypatch) -> None:
+    monkeypatch.delenv("SESSION_SERVICE_URI", raising=False)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "demo-proj")
+    monkeypatch.setenv("CLOUD_SQL_INSTANCE", "tea-sessions")
+    monkeypatch.setenv("SESSION_DB_PASSWORD", "p@ss/w")
+    uri = resolve_session_service_uri()
+    assert uri is not None
+    assert "host=/cloudsql/demo-proj:europe-central2:tea-sessions" in uri
     monkeypatch.delenv("SESSION_SERVICE_URI", raising=False)
     monkeypatch.setenv("CLOUD_SQL_INSTANCE", "demo:europe-central2:tea-sessions")
     monkeypatch.setenv("SESSION_DB_USER", "tea_agent")
