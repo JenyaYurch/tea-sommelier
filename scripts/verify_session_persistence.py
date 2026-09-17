@@ -14,6 +14,7 @@ not a real chat.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 import httpx
@@ -37,6 +38,18 @@ def session_url(base_url: str, telegram_user_id: int, app_name: str = DEFAULT_AP
     return f"{base}/apps/{app_name}/users/{user_id}/sessions/{session_id}"
 
 
+def auth_headers() -> dict[str, str]:
+    """Optional Cloud Run IAM identity token. Never printed."""
+    token = (os.environ.get("CLOUD_RUN_ID_TOKEN") or "").strip()
+    if not token:
+        return {}
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _client() -> httpx.Client:
+    return httpx.Client(timeout=20.0, headers=auth_headers())
+
+
 def _patch_profile(client: httpx.Client, url: str) -> dict:
     patched = client.patch(url, json={"state_delta": PROFILE})
     if patched.status_code not in {200, 201}:
@@ -50,7 +63,7 @@ def write_profile(url: str) -> dict:
     Telegram webhook ``ensure_session`` POSTs ``{}`` first. A GET 200 empty
     session must still receive ``user:`` keys via ADK PATCH state_delta.
     """
-    with httpx.Client(timeout=20.0) as client:
+    with _client() as client:
         existing = client.get(url)
         if existing.status_code == 200:
             return _patch_profile(client, url)
@@ -67,7 +80,7 @@ def write_profile(url: str) -> dict:
 
 
 def check_profile(url: str) -> dict:
-    with httpx.Client(timeout=20.0) as client:
+    with _client() as client:
         loaded = client.get(url)
     if loaded.status_code != 200:
         raise SystemExit(

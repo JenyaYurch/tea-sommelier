@@ -31,6 +31,14 @@ def test_session_url_uses_hyphenated_telegram_ids() -> None:
     assert "tg_140014" not in url
 
 
+def test_auth_headers_use_env_token_without_printing(monkeypatch) -> None:
+    mod = _load()
+    monkeypatch.delenv("CLOUD_RUN_ID_TOKEN", raising=False)
+    assert mod.auth_headers() == {}
+    monkeypatch.setenv("CLOUD_RUN_ID_TOKEN", "id-token")
+    assert mod.auth_headers() == {"Authorization": "Bearer id-token"}
+
+
 def test_check_profile_rejects_missing_user_experience(monkeypatch) -> None:
     mod = _load()
 

@@ -370,8 +370,22 @@ def _service_url(project: str, region: str, service: str) -> str:
     return url
 
 
+def _identity_token(audience: str) -> str:
+    """Cloud Run IAM token for --check when allUsers is denied. Token is not printed."""
+    proc = _gcloud(
+        ["auth", "print-identity-token", f"--audiences={audience.strip().rstrip('/')}"]
+    )
+    if proc.returncode != 0:
+        return ""
+    return (proc.stdout or "").strip()
+
+
 def _verify_cli(agent_url: str, *flags: str) -> None:
     last: subprocess.CompletedProcess[str] | None = None
+    env = os.environ.copy()
+    token = _identity_token(agent_url)
+    if token:
+        env["CLOUD_RUN_ID_TOKEN"] = token
     for attempt in range(1, VERIFY_ATTEMPTS + 1):
         proc = subprocess.run(
             [
@@ -385,6 +399,7 @@ def _verify_cli(agent_url: str, *flags: str) -> None:
             text=True,
             capture_output=True,
             check=False,
+            env=env,
         )
         if proc.stdout.strip():
             print(proc.stdout.strip())

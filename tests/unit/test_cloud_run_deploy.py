@@ -360,5 +360,26 @@ def test_verify_cli_retries_transient_failure(monkeypatch) -> None:
 
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
     monkeypatch.setattr(mod.time, "sleep", lambda _sec: None)
+    monkeypatch.setattr(mod, "_identity_token", lambda _url: "")
     mod._verify_cli("https://tea-agent.example", "--write")
     assert attempts["n"] == 3
+
+
+def test_verify_cli_passes_identity_token_env(monkeypatch) -> None:
+    mod = _load_deploy_module()
+    seen: dict[str, str] = {}
+
+    class Proc:
+        returncode = 0
+        stdout = "wrote session"
+        stderr = ""
+
+    def fake_run(*args, **kwargs):
+        env = kwargs.get("env") or {}
+        seen["token"] = env.get("CLOUD_RUN_ID_TOKEN", "")
+        return Proc()
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(mod, "_identity_token", lambda url: "id-token" if "tea-agent" in url else "")
+    mod._verify_cli("https://tea-agent.example", "--write")
+    assert seen["token"] == "id-token"
