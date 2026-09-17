@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from google.adk.sessions.database_session_service import DatabaseSessionService
 from google.adk.sessions.in_memory_session_service import InMemorySessionService
@@ -181,3 +183,68 @@ async def test_one_telegram_user_maps_to_one_session(tmp_path) -> None:
     )
     assert again is not None
     assert again.id == alice.id
+
+
+_CLOUD_SQL_LIKE_SOCKET = Path("/tmp/cloudsql/demo-proj:europe-central2:tea-sessions")
+_CLOUD_SQL_LIKE_URI = (
+    "postgresql+asyncpg://tea_agent:tea_test_pass@/tea_sessions"
+    f"?host={_CLOUD_SQL_LIKE_SOCKET}"
+)
+
+
+def _postgres_uri_or_skip() -> str:
+    socket = _CLOUD_SQL_LIKE_SOCKET / ".s.PGSQL.5432"
+    if not socket.exists() and not _CLOUD_SQL_LIKE_SOCKET.exists():
+        pytest.skip("Cloud SQL-like Postgres unix socket is not running")
+    return _CLOUD_SQL_LIKE_URI
+
+
+@pytest.mark.asyncio
+async def test_postgres_unix_socket_session_survives_new_service_instance() -> None:
+    """Same driver and unix-socket query form Cloud Run uses for Cloud SQL."""
+    uri = _postgres_uri_or_skip()
+    user_id = telegram_user_key(880014)
+    session_id = telegram_session_id(880014)
+    first = DatabaseSessionService(db_url=uri)
+    try:
+        await first.delete_session(
+            app_name="tea_agent", user_id=user_id, session_id=session_id
+        )
+    except Exception:
+        pass
+    try:
+        created = await first.create_session(
+            app_name="tea_agent",
+            user_id=user_id,
+            session_id=session_id,
+            state={
+                "experience": "новичок",
+                "user:experience": "новичок",
+                "user:taste_profile": "мягкий без горечи",
+                "user:profile_complete": True,
+            },
+        )
+    except Exception as err:
+        pytest.skip(f"postgres unavailable: {err}")
+    assert created.id == session_id
+
+    restarted = DatabaseSessionService(db_url=uri)
+    loaded = await restarted.get_session(
+        app_name="tea_agent",
+        user_id=user_id,
+        session_id=session_id,
+    )
+    assert loaded is not None
+    assert loaded.id == session_id
+    assert loaded.user_id == user_id
+    assert loaded.state.get("user:experience") == "новичок"
+    assert loaded.state.get("experience") == "новичок"
+    assert loaded.state.get("user:taste_profile") == "мягкий без горечи"
+    assert loaded.state.get("user:profile_complete") is True
+
+    missing = await restarted.get_session(
+        app_name="tea_agent",
+        user_id=telegram_user_key(880015),
+        session_id=telegram_session_id(880015),
+    )
+    assert missing is None
