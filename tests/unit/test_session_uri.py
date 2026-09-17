@@ -15,6 +15,7 @@ from tea_agent.app_utils.session_uri import (
     is_ephemeral_session_uri,
     missing_persistent_backend_error,
     postgres_engine_kwargs,
+    postgres_unix_socket_path,
     postgres_unix_uri,
     resolve_session_service_uri,
 )
@@ -134,9 +135,25 @@ def test_postgres_engine_kwargs_only_for_postgresql() -> None:
         "max_overflow": 2,
         "pool_timeout": 30,
         "pool_recycle": 1800,
+        "connect_args": {"timeout": 10},
     }
     assert postgres_engine_kwargs(LOCAL_SQLITE_URI) == {}
     assert postgres_engine_kwargs("agentengine://projects/p/locations/eu/re/1") == {}
+
+
+def test_postgres_unix_socket_path_appends_pg_suffix() -> None:
+    uri = postgres_unix_uri(
+        user="tea_agent",
+        password="p@ss/w",
+        database="tea_sessions",
+        instance_connection_name="demo-proj:europe-central2:tea-sessions",
+    )
+    assert (
+        postgres_unix_socket_path(uri)
+        == "/cloudsql/demo-proj:europe-central2:tea-sessions/.s.PGSQL.5432"
+    )
+    assert postgres_unix_socket_path(LOCAL_SQLITE_URI) is None
+    assert postgres_unix_socket_path("postgresql+asyncpg://u:p@127.0.0.1/db") is None
 
 
 def test_sqlite_uri_is_ephemeral_postgres_and_agent_engine_are_not() -> None:

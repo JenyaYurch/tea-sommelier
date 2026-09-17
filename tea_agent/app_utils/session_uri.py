@@ -13,7 +13,7 @@ taste profiles.
 from __future__ import annotations
 
 import os
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 LOCAL_SQLITE_URI = "sqlite+aiosqlite:///./sessions.db"
 DEFAULT_DB_USER = "tea_agent"
@@ -95,11 +95,23 @@ def is_ephemeral_session_uri(uri: str) -> bool:
     return True
 
 
-def postgres_engine_kwargs(uri: str) -> dict[str, int]:
+def postgres_unix_socket_path(uri: str) -> str | None:
+    """Return ``/cloudsql/PROJECT:REGION:INSTANCE/.s.PGSQL.5432`` when URI uses a unix host."""
+    parsed = urlparse(uri)
+    if not (parsed.scheme or "").lower().startswith("postgresql"):
+        return None
+    host = (parse_qs(parsed.query).get("host") or [""])[0]
+    if not host.startswith("/"):
+        return None
+    return f"{host.rstrip('/')}/.s.PGSQL.5432"
+
+
+def postgres_engine_kwargs(uri: str) -> dict[str, object]:
     """Cloud Run / Cloud SQL pool settings for DatabaseSessionService.
 
     ADK already sets pool_pre_ping for non-sqlite. Keep the pool small so
-    scale-out instances do not exhaust Cloud SQL connections.
+    scale-out instances do not exhaust Cloud SQL connections. asyncpg
+    ``timeout`` fails fast if the Cloud SQL proxy socket is not accepting yet.
     """
     scheme = (urlparse(uri).scheme or "").lower()
     if not scheme.startswith("postgresql"):
@@ -109,6 +121,7 @@ def postgres_engine_kwargs(uri: str) -> dict[str, int]:
         "max_overflow": 2,
         "pool_timeout": 30,
         "pool_recycle": 1800,
+        "connect_args": {"timeout": 10},
     }
 
 

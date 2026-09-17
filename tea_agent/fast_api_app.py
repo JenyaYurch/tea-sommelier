@@ -87,6 +87,7 @@ app: FastAPI = get_fast_api_app(
     memory_service_uri=services.MEMORY_SERVICE_URI,
     otel_to_cloud=_otel_to_cloud(),
     lifespan=lifespan,
+    auto_create_session=True,
 )
 app.title = "tea-sommelier"
 app.description = "API for interacting with the Agent tea-sommelier"

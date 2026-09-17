@@ -43,6 +43,7 @@ from tea_agent.app_utils.session_uri import (
     is_ephemeral_session_uri,
     missing_persistent_backend_error,
     postgres_engine_kwargs,
+    postgres_unix_socket_path,
     resolve_session_service_uri,
 )
 
@@ -95,6 +96,7 @@ async def ensure_session_store_ready():
     prepare = getattr(service, "prepare_tables", None)
     if not callable(prepare):
         return service
+    await _wait_for_postgres_unix_socket(resolve_session_service_uri())
     last_error: BaseException | None = None
     for attempt in range(1, _PREPARE_TABLE_ATTEMPTS + 1):
         try:
@@ -112,6 +114,28 @@ async def ensure_session_store_ready():
             )
             await asyncio.sleep(0.5 * attempt)
     raise last_error  # pragma: no cover
+
+
+async def _wait_for_postgres_unix_socket(uri: str | None) -> None:
+    """Cloud SQL Auth Proxy can mount ``/cloudsql/...`` after process start."""
+    if not os.environ.get(CLOUD_RUN_SERVICE_ENV):
+        return
+    path = postgres_unix_socket_path(uri or "")
+    if not path:
+        return
+    for attempt in range(1, _PREPARE_TABLE_ATTEMPTS + 1):
+        if os.path.exists(path):
+            return
+        if attempt == _PREPARE_TABLE_ATTEMPTS:
+            _log.warning("Cloud SQL unix socket still missing: %s", path)
+            return
+        _log.warning(
+            "Waiting for Cloud SQL unix socket (attempt %s/%s): %s",
+            attempt,
+            _PREPARE_TABLE_ATTEMPTS,
+            path,
+        )
+        await asyncio.sleep(0.5 * attempt)
 
 
 def _is_retryable_db_error(err: BaseException) -> bool:

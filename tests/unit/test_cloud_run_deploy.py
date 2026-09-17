@@ -69,6 +69,7 @@ def test_agent_deploy_uses_secret_manager_not_plaintext_key() -> None:
     assert "GOOGLE_API_KEY=GOOGLE_API_KEY:latest" in joined
     assert "AIza" not in joined
     assert "--allow-unauthenticated" in args
+    assert "--execution-environment=gen2" in args
     assert "GOOGLE_CLOUD_AGENT_ENGINE_ID=" not in joined
     assert "--add-cloudsql-instances" not in joined
     assert "SESSION_DB_PASSWORD" not in joined
@@ -136,6 +137,12 @@ def test_agent_dockerfile_copies_catalog_data() -> None:
     text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert "COPY ./data ./data" in text
     assert "COPY ./telegram_integration ./telegram_integration" in text
+
+
+def test_agent_fast_api_auto_creates_named_telegram_sessions() -> None:
+    text = (ROOT / "tea_agent" / "fast_api_app.py").read_text(encoding="utf-8")
+    assert "auto_create_session=True" in text
+    assert "session_service_uri=services.SESSION_SERVICE_URI" in text
 
 
 def test_dockerignore_keeps_env_out_of_image() -> None:

@@ -133,6 +133,7 @@ def test_cloud_run_accepts_postgres_uri(monkeypatch) -> None:
             "max_overflow": 2,
             "pool_timeout": 30,
             "pool_recycle": 1800,
+            "connect_args": {"timeout": 10},
         }
         return sentinel
 
@@ -179,6 +180,50 @@ async def test_ensure_session_store_ready_retries_connect_errors(monkeypatch) ->
         assert isinstance(ready, FakeService)
         assert prepared["n"] == 3
         assert sleeps == [0.5, 1.0]
+    finally:
+        _reset()
+
+
+@pytest.mark.asyncio
+async def test_ensure_session_store_ready_waits_for_cloud_run_socket(
+    monkeypatch,
+) -> None:
+    prepared = {"n": 0}
+    exists_calls: list[str] = []
+
+    class FakeService:
+        async def prepare_tables(self) -> None:
+            prepared["n"] += 1
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    def fake_exists(path: str) -> bool:
+        exists_calls.append(path)
+        return len(exists_calls) >= 2
+
+    _clear_backends(monkeypatch)
+    monkeypatch.setenv(CLOUD_RUN_SERVICE_ENV, "tea-agent")
+    monkeypatch.setenv(
+        "SESSION_SERVICE_URI",
+        "postgresql+asyncpg://tea_agent:x@/tea_sessions?host=/cloudsql/p:r:i",
+    )
+    monkeypatch.setattr(
+        services,
+        "create_session_service_from_options",
+        lambda **kw: FakeService(),
+    )
+    monkeypatch.setattr(services.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(services.os.path, "exists", fake_exists)
+    _reset()
+    try:
+        ready = await services.ensure_session_store_ready()
+        assert isinstance(ready, FakeService)
+        assert prepared["n"] == 1
+        assert exists_calls[0].endswith("/.s.PGSQL.5432")
+        assert sleeps == [0.5]
     finally:
         _reset()
 

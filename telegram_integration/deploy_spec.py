@@ -123,6 +123,7 @@ def agent_deploy_args(
         f"--region={region}",
         "--allow-unauthenticated",
         "--port=8080",
+        "--execution-environment=gen2",
         f"--memory={AGENT_MEMORY}",
         f"--timeout={REQUEST_TIMEOUT}",
         "--set-secrets=" + agent_secret_bindings(cloud_sql_instance=instance),
