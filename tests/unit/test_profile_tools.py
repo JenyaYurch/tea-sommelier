@@ -19,8 +19,14 @@ def test_save_taste_profile_writes_session_state() -> None:
 
     assert result["status"] == "success"
     assert state["experience"] == "новичок"
+    assert state["user:experience"] == "новичок"
     assert state["taste_profile"] == "мягкий без горечи"
+    assert state["user:taste_profile"] == "мягкий без горечи"
     assert state["caffeine_pref"] == "низкий"
+    assert state["user:caffeine_pref"] == "низкий"
     assert state["vessel"] == "кружка"
+    assert state["user:vessel"] == "кружка"
     assert state["liked_teas"] == ["Лунцзин", "Би Ло Чунь"]
+    assert state["user:liked_teas"] == ["Лунцзин", "Би Ло Чунь"]
     assert state["profile_complete"] is True
+    assert state["user:profile_complete"] is True

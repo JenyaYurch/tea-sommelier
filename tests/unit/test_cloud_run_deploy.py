@@ -69,6 +69,8 @@ def test_agent_deploy_uses_secret_manager_not_plaintext_key() -> None:
     assert "AIza" not in joined
     assert "--allow-unauthenticated" in args
     assert "GOOGLE_CLOUD_AGENT_ENGINE_ID=" not in joined
+    assert "--add-cloudsql-instances" not in joined
+    assert "SESSION_DB_PASSWORD" not in joined
 
 
 def test_agent_deploy_passes_memory_bank_engine_when_set() -> None:
@@ -80,6 +82,26 @@ def test_agent_deploy_passes_memory_bank_engine_when_set() -> None:
     env = next(item for item in args if item.startswith("--set-env-vars="))
     assert "GOOGLE_CLOUD_AGENT_ENGINE_ID=engine-123" in env
     assert "GOOGLE_CLOUD_AGENT_ENGINE_LOCATION=eu" in env
+
+
+def test_agent_deploy_adds_cloud_sql_socket_without_db_password() -> None:
+    args = agent_deploy_args(
+        project="demo-proj",
+        cloud_sql_instance="demo-proj:europe-central2:tea-sessions",
+        session_db_user="tea_agent",
+        session_db_name="tea_sessions",
+    )
+    joined = " ".join(args)
+    assert "--add-cloudsql-instances=demo-proj:europe-central2:tea-sessions" in args
+    env = next(item for item in args if item.startswith("--set-env-vars="))
+    secrets = next(item for item in args if item.startswith("--set-secrets="))
+    assert "CLOUD_SQL_INSTANCE=demo-proj:europe-central2:tea-sessions" in env
+    assert "SESSION_DB_USER=tea_agent" in env
+    assert "SESSION_DB_NAME=tea_sessions" in env
+    assert "SESSION_DB_PASSWORD=SESSION_DB_PASSWORD:latest" in secrets
+    assert "postgresql+" not in joined
+    assert "s3cret" not in joined
+    assert "@/" not in joined
 
 
 def test_agent_dockerfile_copies_catalog_data() -> None:

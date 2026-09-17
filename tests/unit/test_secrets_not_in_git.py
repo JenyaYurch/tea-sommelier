@@ -48,4 +48,8 @@ def test_env_example_has_placeholders_only() -> None:
     assert "TELEGRAM_BOT_TOKEN=" + "1" * 20 not in text
     assert "deploy_cloud_run.py --execute" in text
     assert "setup_memory_bank.py" in text
+    assert "setup_cloud_sql.py" in text
     assert "GOOGLE_CLOUD_AGENT_ENGINE_LOCATION=eu" in text
+    assert "CLOUD_SQL_INSTANCE=" in text
+    assert "SESSION_DB_PASSWORD=your" not in text
+    assert "sqlite+aiosqlite:///./sessions.db" in text

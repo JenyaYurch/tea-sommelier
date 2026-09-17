@@ -16,8 +16,11 @@
 
 Registered under ``shared://`` so the ADK web routes, the A2A path, and the
 reasoning_engine adapter share one instance: a session created on any surface
-is visible to the others. Memory Bank uses the same Agent Engine id as sessions
-when ``GOOGLE_CLOUD_AGENT_ENGINE_ID`` is set.
+is visible to the others.
+
+Sessions (TEA-14) default to in-memory, SQLite, or Cloud SQL via
+``SESSION_SERVICE_URI`` / ``CLOUD_SQL_INSTANCE``. Memory Bank is separate:
+``GOOGLE_CLOUD_AGENT_ENGINE_ID`` does not switch the session backend.
 """
 
 from __future__ import annotations
@@ -32,6 +35,8 @@ from google.adk.cli.utils.service_factory import (
     create_session_service_from_options,
 )
 
+from tea_agent.app_utils.session_uri import resolve_session_service_uri
+
 SESSION_SERVICE_URI = "shared://session"
 ARTIFACT_SERVICE_URI = "shared://artifact"
 MEMORY_SERVICE_URI = "shared://memory"
@@ -44,19 +49,9 @@ _AGENT_DIR = os.path.dirname(
 @functools.cache
 def get_session_service():
     """Process-wide session service shared across every serving surface."""
-    if uri := os.environ.get("SESSION_SERVICE_URI"):
+    if uri := resolve_session_service_uri():
         return create_session_service_from_options(
             base_dir=_AGENT_DIR, session_service_uri=uri
-        )
-    if agent_engine_id := os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID"):
-        from google.adk.sessions.vertex_ai_session_service import VertexAiSessionService
-
-        return VertexAiSessionService(
-            project=os.environ.get("GOOGLE_CLOUD_PROJECT"),
-            # Runtime-injected agent-engine region, not GOOGLE_CLOUD_LOCATION
-            # (which agent.py pins to "global").
-            location=_agent_engine_location(),
-            agent_engine_id=agent_engine_id,
         )
     from google.adk.sessions.in_memory_session_service import InMemorySessionService
 

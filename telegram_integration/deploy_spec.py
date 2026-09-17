@@ -18,6 +18,9 @@ TELEGRAM_ARGS = "run,python,-m,telegram_integration"
 AGENT_MEMORY = "1Gi"
 TELEGRAM_MEMORY = "512Mi"
 REQUEST_TIMEOUT = "300"
+DEFAULT_SESSION_DB_USER = "tea_agent"
+DEFAULT_SESSION_DB_NAME = "tea_sessions"
+CLOUD_SQL_INSTANCE_NAME = "tea-sessions"
 
 
 def normalize_service_url(url: str) -> str:
@@ -42,6 +45,9 @@ def agent_env_vars(
     location: str = "global",
     agent_engine_id: str | None = None,
     agent_engine_location: str | None = None,
+    cloud_sql_instance: str | None = None,
+    session_db_user: str | None = None,
+    session_db_name: str | None = None,
 ) -> str:
     parts = [
         "GOOGLE_GENAI_USE_VERTEXAI=false",
@@ -54,6 +60,15 @@ def agent_env_vars(
     engine_location = (agent_engine_location or "").strip()
     if engine_location:
         parts.append(f"GOOGLE_CLOUD_AGENT_ENGINE_LOCATION={engine_location}")
+    instance = (cloud_sql_instance or "").strip()
+    if instance:
+        parts.append(f"CLOUD_SQL_INSTANCE={instance}")
+        parts.append(
+            f"SESSION_DB_USER={(session_db_user or DEFAULT_SESSION_DB_USER).strip()}"
+        )
+        parts.append(
+            f"SESSION_DB_NAME={(session_db_name or DEFAULT_SESSION_DB_NAME).strip()}"
+        )
     return ",".join(parts)
 
 
@@ -72,6 +87,13 @@ def telegram_env_vars(
     )
 
 
+def agent_secret_bindings(*, cloud_sql_instance: str | None = None) -> str:
+    secrets = ["GOOGLE_API_KEY=GOOGLE_API_KEY:latest"]
+    if (cloud_sql_instance or "").strip():
+        secrets.append("SESSION_DB_PASSWORD=SESSION_DB_PASSWORD:latest")
+    return ",".join(secrets)
+
+
 def agent_deploy_args(
     *,
     project: str,
@@ -79,8 +101,11 @@ def agent_deploy_args(
     service: str = AGENT_SERVICE,
     agent_engine_id: str | None = None,
     agent_engine_location: str | None = None,
+    cloud_sql_instance: str | None = None,
+    session_db_user: str | None = None,
+    session_db_name: str | None = None,
 ) -> list[str]:
-    return [
+    args = [
         "run",
         "deploy",
         service,
@@ -92,15 +117,22 @@ def agent_deploy_args(
         "--port=8080",
         f"--memory={AGENT_MEMORY}",
         f"--timeout={REQUEST_TIMEOUT}",
-        "--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest",
+        "--set-secrets=" + agent_secret_bindings(cloud_sql_instance=cloud_sql_instance),
         "--set-env-vars="
         + agent_env_vars(
             project=project,
             agent_engine_id=agent_engine_id,
             agent_engine_location=agent_engine_location,
+            cloud_sql_instance=cloud_sql_instance,
+            session_db_user=session_db_user,
+            session_db_name=session_db_name,
         ),
-        "--quiet",
     ]
+    instance = (cloud_sql_instance or "").strip()
+    if instance:
+        args.append(f"--add-cloudsql-instances={instance}")
+    args.append("--quiet")
+    return args
 
 
 def telegram_deploy_args(
