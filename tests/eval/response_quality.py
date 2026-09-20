@@ -77,8 +77,8 @@ def evaluate(instance):
     client = genai.Client(
         http_options=types.HttpOptions(timeout=90_000)
     )  # AI Studio (GEMINI_API_KEY) or Agent Platform (ADC)
-    # Judge models; the agent under test runs gemini-3.6-flash. Kept off the
-    # agent's model so judge calls don't share its tiny free-tier daily quota.
+    # Judge models; the agent under test runs gemini-3.1-flash-lite. Kept off
+    # the agent's model so judge calls don't share its free-tier daily quota.
     # Fallback: flash-lite when the primary judge is overloaded (503 spikes).
     response = None
     last_exc: Exception | None = None

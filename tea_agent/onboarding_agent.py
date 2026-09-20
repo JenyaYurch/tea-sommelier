@@ -8,7 +8,7 @@ from google.genai import types
 
 from tea_agent.profile_tools import save_taste_profile
 
-MODEL = os.environ.get("TEA_AGENT_MODEL", "gemini-3.6-flash")
+MODEL = os.environ.get("TEA_AGENT_MODEL", "gemini-3.1-flash-lite")
 
 ONBOARDING_INSTRUCTION = """
 Ты — онбординг-ассистент сомелье по китайскому чаю (зелёный, белый, жёлтый, красный, пуэр, GABA).
