@@ -1,11 +1,11 @@
-"""Function tools: tea.support retrieval + local Chinese-green slug resolve."""
+"""Function tools: tea.support retrieval + local Chinese-tea slug resolve."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from tea_agent.shop_catalog import find_products
-from tea_agent.slug_index import china_green_slugs, resolve_query
+from tea_agent.slug_index import known_tea_slugs, resolve_query
 from tea_agent.tea_support import compact_tea_card, get_json
 
 
@@ -19,7 +19,7 @@ def resolve_tea(query: str) -> dict[str, Any]:
         query: Tea name or alias to resolve.
 
     Returns:
-        Dict with status and ranked slug matches from the local China-green dictionary.
+        Dict with status and ranked slug matches from the local Chinese-tea dictionary.
     """
     matches = resolve_query(query, limit=5)
     if not matches:
@@ -35,8 +35,9 @@ def resolve_tea(query: str) -> dict[str, Any]:
 def search_teas(vibe: str) -> dict[str, Any]:
     """Semantic search over tea.support by taste/mood ('soft, no bitterness, morning').
 
-    Prefer English vibe phrases. Results are filtered to Chinese green teas
-    from the local slug dictionary. Do not use this for shop prices.
+    Prefer English vibe phrases. Results are filtered to teas in the local
+    slug dictionary (Chinese white/yellow/green/red/puer/oolong). Do not use
+    this for shop prices.
 
     Args:
         vibe: Natural-language taste/mood description, preferably English.
@@ -47,13 +48,11 @@ def search_teas(vibe: str) -> dict[str, Any]:
     payload = get_json("/api/v2/semantic", {"q": vibe})
     if payload.get("status") == "error":
         return payload
-    allowed = china_green_slugs()
+    allowed = known_tea_slugs()
     matches: list[dict[str, Any]] = []
     for item in payload.get("matches") or []:
         slug = item.get("slug")
         if slug not in allowed:
-            continue
-        if item.get("tea_type") and item.get("tea_type") != "green":
             continue
         matches.append(
             {
@@ -100,12 +99,12 @@ def similar_teas(slug: str) -> dict[str, Any]:
         slug: tea.support slug to find neighbors for.
 
     Returns:
-        Dict with status and similar Chinese green teas when possible.
+        Dict with status and similar teas from the local encyclopedia when possible.
     """
     payload = get_json(f"/api/v2/tea/{slug}/similar")
     if payload.get("status") == "error":
         return payload
-    allowed = china_green_slugs()
+    allowed = known_tea_slugs()
     similar: list[dict[str, Any]] = []
     for item in payload.get("similar") or []:
         other = item.get("slug")

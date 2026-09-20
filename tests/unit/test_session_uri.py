@@ -11,6 +11,7 @@ from sqlalchemy.engine import make_url
 from tea_agent.app_utils.session_uri import (
     CLOUD_RUN_SERVICE_ENV,
     LOCAL_SQLITE_URI,
+    allow_ephemeral_sessions,
     apply_local_sqlite_default,
     is_ephemeral_session_uri,
     missing_persistent_backend_error,
@@ -126,6 +127,15 @@ def test_missing_persistent_backend_error_mentions_cloud_run() -> None:
     assert "CLOUD_SQL_INSTANCE" in str(err)
     assert "GOOGLE_CLOUD_AGENT_ENGINE_ID" in str(err)
     assert "sqlite" in str(err)
+
+
+def test_allow_ephemeral_sessions_truthy(monkeypatch) -> None:
+    monkeypatch.delenv("TEA_ALLOW_EPHEMERAL_SESSIONS", raising=False)
+    assert allow_ephemeral_sessions() is False
+    monkeypatch.setenv("TEA_ALLOW_EPHEMERAL_SESSIONS", "true")
+    assert allow_ephemeral_sessions() is True
+    monkeypatch.setenv("TEA_ALLOW_EPHEMERAL_SESSIONS", "0")
+    assert allow_ephemeral_sessions() is False
 
 
 def test_postgres_engine_kwargs_only_for_postgresql() -> None:

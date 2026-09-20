@@ -12,6 +12,8 @@ def test_start_text_does_not_claim_local_only() -> None:
     lowered = START_TEXT.lower()
     assert "локальн" not in lowered
     assert "лунцзин" in lowered
+    assert "сомелье по зелёному" not in lowered
+    assert "сомелье по зеленому" not in lowered
 
 
 def test_quota_error_detects_adk_quota() -> None:

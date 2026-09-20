@@ -26,7 +26,19 @@ from telegram.ext import (
     filters,
 )
 
-from telegram_integration.adk_client import AdkClientError, AdkHttpClient, AdkQuotaError
+from telegram_integration.adk_client import (
+    TEA_AGENT_ERROR,
+    TEA_COLD_START,
+    TEA_EMPTY_REPLY,
+    TEA_QUOTA,
+    TEA_SESSION_FAILED,
+    TEA_TIMEOUT_RUN,
+    TEA_UNAVAILABLE,
+    TEA_UNKNOWN,
+    AdkClientError,
+    AdkHttpClient,
+    classify_adk_error,
+)
 from telegram_integration.deploy_spec import (
     ADK_APP_NAME,
     is_webhook_mode,
@@ -50,9 +62,10 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger("telegram_integration")
 
 START_TEXT = (
-    "Привет, я сомелье по зелёному китайскому чаю.\n\n"
-    "Напишите, какой вкус хотите (мягкий, без горечи, утро), "
-    "или спросите про сорт — Лунцзин, Би Ло Чунь, Аньцзи Бай Ча."
+    "Привет, я сомелье по китайскому чаю: зелёный, белый, жёлтый, "
+    "красный, шен/шу пуэр и GABA.\n\n"
+    "Напишите вкус (мягкий, без горечи, утро), сорт — Лунцзин, Бай Му Дань, "
+    "Дянь Хун, шен пуэр — или пришлите список из заказа."
 )
 UNAVAILABLE_TEXT = (
     "Сомелье временно недоступен. Попробуйте ещё раз через минуту."
@@ -61,20 +74,54 @@ QUOTA_TEXT = (
     "Сейчас упёрлись в лимит бесплатного Gemini: 5 запросов в минуту, "
     "а один ответ с инструментами тратит несколько. Подождите около 30 секунд и напишите снова."
 )
+COLD_START_TEXT = (
+    "Сомелье сейчас запускается. Подождите 20–30 секунд и напишите ещё раз."
+)
+TIMEOUT_RUN_TEXT = (
+    "Запрос слишком долгий. Упростите вопрос или попробуйте снова через минуту."
+)
+AGENT_ERROR_TEXT = (
+    "Сбой на стороне сомелье. Напишите ещё раз — если повторится, это уже не холодный старт."
+)
+SESSION_FAILED_TEXT = (
+    "Не удалось открыть сессию. Попробуйте ещё раз через минуту."
+)
+EMPTY_REPLY_TEXT = (
+    "Не получилось собрать ответ. Напишите ещё раз другими словами."
+)
+USER_TEXT_BY_ERROR_CODE = {
+    TEA_COLD_START: COLD_START_TEXT,
+    TEA_TIMEOUT_RUN: TIMEOUT_RUN_TEXT,
+    TEA_UNAVAILABLE: UNAVAILABLE_TEXT,
+    TEA_QUOTA: QUOTA_TEXT,
+    TEA_AGENT_ERROR: AGENT_ERROR_TEXT,
+    TEA_SESSION_FAILED: SESSION_FAILED_TEXT,
+    TEA_EMPTY_REPLY: EMPTY_REPLY_TEXT,
+    TEA_UNKNOWN: UNAVAILABLE_TEXT,
+}
 TYPING_INTERVAL_SEC = 4.0
+_SOFT_ERROR_CODES = {TEA_QUOTA, TEA_COLD_START, TEA_TIMEOUT_RUN, TEA_EMPTY_REPLY}
 
 
 def _is_quota_error(err: BaseException | None) -> bool:
-    if isinstance(err, AdkQuotaError):
-        return True
-    seen: set[int] = set()
-    while err is not None and id(err) not in seen:
-        seen.add(id(err))
-        status = getattr(err, "status_code", None) or getattr(err, "code", None)
-        if status == 429 or "RESOURCE_EXHAUSTED" in str(err):
-            return True
-        err = err.__cause__ or err.__context__
-    return False
+    return err is not None and classify_adk_error(err) == TEA_QUOTA
+
+
+def user_text_for_error_code(error_code: str) -> str:
+    return USER_TEXT_BY_ERROR_CODE.get(error_code, UNAVAILABLE_TEXT)
+
+
+def _log_agent_failure(
+    telegram_user_id: int, error_code: str, err: BaseException | None = None
+) -> None:
+    status = getattr(err, "status_code", None) if err is not None else None
+    status_part = f" status={status}" if status is not None else ""
+    message = "agent failed for telegram user %s error_code=%s%s"
+    args = (telegram_user_id, error_code, status_part)
+    if error_code in _SOFT_ERROR_CODES:
+        logger.warning(message, *args, exc_info=err is not None)
+        return
+    logger.exception(message, *args)
 
 
 def _load_env() -> None:
@@ -175,7 +222,7 @@ async def _typing_loop(chat_id: int, bot, stop: asyncio.Event) -> None:
 async def _deliver_reply(target: Message, text: str) -> None:
     chunks, markup = prepare_telegram_reply(text)
     if not chunks:
-        await target.reply_text(UNAVAILABLE_TEXT)
+        await target.reply_text(EMPTY_REPLY_TEXT)
         return
     last = len(chunks) - 1
     for index, chunk in enumerate(chunks):
@@ -210,16 +257,12 @@ async def _run_agent_and_reply(
     try:
         reply = await ask_agent(bot_data, telegram_user_id, text)
         if not reply:
-            reply = UNAVAILABLE_TEXT
+            _log_agent_failure(telegram_user_id, TEA_EMPTY_REPLY)
+            reply = EMPTY_REPLY_TEXT
     except Exception as err:
-        if _is_quota_error(err):
-            logger.warning(
-                "Gemini quota exhausted for telegram user %s", telegram_user_id
-            )
-            reply = QUOTA_TEXT
-        else:
-            logger.exception("agent failed for telegram user %s", telegram_user_id)
-            reply = UNAVAILABLE_TEXT
+        error_code = classify_adk_error(err)
+        _log_agent_failure(telegram_user_id, error_code, err)
+        reply = user_text_for_error_code(error_code)
     finally:
         stop.set()
         typing_task.cancel()

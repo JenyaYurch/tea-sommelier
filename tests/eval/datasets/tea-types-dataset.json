@@ -1,0 +1,57 @@
+{
+  "eval_cases": [
+    {
+      "eval_case_id": "mixed_order_cart",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Разбери заказ: жасмин + шен пуэр + шу пуэр + Дянь Хун + Дун Дин + Е Шен Сычуань + Ю Лань Чи Гань"
+          }
+        ]
+      }
+    },
+    {
+      "eval_case_id": "brew_shu_puerh",
+      "prompt": {
+        "role": "user",
+        "parts": [{"text": "Как заварить шу пуэр?"}]
+      }
+    },
+    {
+      "eval_case_id": "what_is_dianhong",
+      "prompt": {
+        "role": "user",
+        "parts": [{"text": "Что такое Дянь Хун?"}]
+      }
+    },
+    {
+      "eval_case_id": "ye_shen_not_out_of_scope",
+      "prompt": {
+        "role": "user",
+        "parts": [{"text": "Расскажи про Е Шен Сычуань"}]
+      }
+    },
+    {
+      "eval_case_id": "gaba_no_invention",
+      "prompt": {
+        "role": "user",
+        "parts": [{"text": "Что такое GABA-чай и как его заваривать?"}]
+      }
+    },
+    {
+      "eval_case_id": "white_bai_mudan",
+      "prompt": {
+        "role": "user",
+        "parts": [{"text": "Что такое Бай Му Дань?"}]
+      }
+    },
+    {
+      "eval_case_id": "yellow_junshan",
+      "prompt": {
+        "role": "user",
+        "parts": [{"text": "Что такое Цзюнь Шань Инь Чжэнь?"}]
+      }
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-"""Scrape teashop.by green-tea category into data/teashop_catalog.json.
+"""Scrape teashop.by Chinese-tea categories into data/teashop_catalog.json.
 
 Biweekly refresh checklist (every 1–2 weeks):
   1. uv run python scripts/parse_teashop.py --status
@@ -43,8 +43,26 @@ from tea_agent.shop_catalog import (  # noqa: E402
 
 logger = logging.getLogger("parse_teashop")
 
+# v1 shop scope: white, yellow, green, red, puer (sheng+shu), GABA.
+# Full oolong trees are a follow-up; GABA lives under ulun/gaba/.
+CATEGORY_URLS: tuple[str, ...] = (
+    "https://www.teashop.by/shop/chaj/beliy/",
+    "https://www.teashop.by/shop/chaj/zheltiy/",
+    "https://www.teashop.by/shop/chaj/zeleniy/",
+    "https://www.teashop.by/shop/chaj/cherniy/",
+    "https://www.teashop.by/shop/chaj/puer/",
+    "https://www.teashop.by/shop/chaj/ulun/gaba/",
+)
+CATEGORY_LABELS: dict[str, str] = {
+    "beliy": "Белый чай",
+    "zheltiy": "Жёлтый чай",
+    "zeleniy": "Зеленый чай",
+    "cherniy": "Красный чай",
+    "puer": "Пуэр",
+    "gaba": "GABA",
+}
 GREEN_CATEGORY_URL = "https://www.teashop.by/shop/chaj/zeleniy/"
-CATEGORY_URL = "https://www.teashop.by/shop/chaj/zeleniy/"
+CATEGORY_URL = GREEN_CATEGORY_URL
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -74,10 +92,19 @@ def extract_breadcrumbs(soup: BeautifulSoup) -> tuple[str | None, str | None]:
     return category, subcategory
 
 
-def _page_url(page: int) -> str:
+def _category_key(category_url: str) -> str:
+    return category_url.rstrip("/").rsplit("/", 1)[-1]
+
+
+def _fallback_category_label(category_url: str) -> str:
+    return CATEGORY_LABELS.get(_category_key(category_url), "Чай")
+
+
+def _page_url(category_url: str, page: int) -> str:
+    base = category_url if category_url.endswith("/") else f"{category_url}/"
     if page <= 1:
-        return GREEN_CATEGORY_URL
-    return f"{GREEN_CATEGORY_URL}page/{page}/"
+        return base
+    return f"{base}page/{page}/"
 
 
 def _extract_weight(form_tag: Any) -> int | None:
@@ -109,21 +136,47 @@ def _availability(product: Any) -> str:
 def _match_slug(
     product_name: str, product_url: str | None = None
 ) -> tuple[str | None, str]:
-    """Return (slug, confidence) using the local China-green dictionary."""
+    """Return (slug, confidence) using the local tea.support dictionary."""
     return match_product_to_slug(product_name, product_url)
 
 
 def parse_catalog(
     session: requests.Session | None = None,
-    max_pages: int = 6,
+    max_pages: int = 12,
     fetch_details: bool = True,
+    category_urls: tuple[str, ...] | list[str] | None = None,
 ) -> list[dict[str, Any]]:
     sess = session or requests.Session()
     teas: list[dict[str, Any]] = []
     today = date.today().isoformat()
+    urls = tuple(category_urls) if category_urls else CATEGORY_URLS
+
+    for category_url in urls:
+        teas.extend(
+            _parse_category(
+                sess,
+                category_url=category_url,
+                max_pages=max_pages,
+                fetch_details=fetch_details,
+                today=today,
+            )
+        )
+    return teas
+
+
+def _parse_category(
+    sess: requests.Session,
+    *,
+    category_url: str,
+    max_pages: int,
+    fetch_details: bool,
+    today: str,
+) -> list[dict[str, Any]]:
+    teas: list[dict[str, Any]] = []
+    fallback_label = _fallback_category_label(category_url)
 
     for page in range(1, max_pages + 1):
-        url = _page_url(page)
+        url = _page_url(category_url, page)
         logger.info("Fetching %s", url)
         try:
             resp = sess.get(url, headers=HEADERS, timeout=20)
@@ -143,7 +196,7 @@ def parse_catalog(
         if not products:
             products = soup.select("ul.products li.product")
         if not products:
-            logger.info("No products on page %s — stop", page)
+            logger.info("No products on page %s of %s — stop", page, category_url)
             break
 
         seen_on_page: set[str] = set()
@@ -228,9 +281,9 @@ def parse_catalog(
                     "availability": _availability(product),
                     "harvest_year": harvest,
                     "weight_g": weight,
-                    "category": category or "Зеленый чай",
+                    "category": category or fallback_label,
                     "subcategory": subcategory,
-                    "category_url": CATEGORY_URL,
+                    "category_url": category_url,
                     "product_url": link,
                     "image_url": image_url,
                     "description": description,
@@ -266,7 +319,8 @@ def write_catalog(items: list[dict[str, Any]], path: Path) -> None:
     today = date.today().isoformat()
     payload = {
         "source": "teashop.by",
-        "category_url": CATEGORY_URL,
+        "category_url": CATEGORY_URLS[0],
+        "category_urls": list(CATEGORY_URLS),
         "generated_on": today,
         "last_checked": today,
         "refresh_interval_days": REFRESH_INTERVAL_DAYS,
@@ -301,13 +355,13 @@ def print_status() -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Parse teashop.by green teas")
+    parser = argparse.ArgumentParser(description="Parse teashop.by Chinese teas")
     parser.add_argument(
         "--status",
         action="store_true",
         help="Show last_checked / freshness and exit 1 if refresh is due",
     )
-    parser.add_argument("--max-pages", type=int, default=6)
+    parser.add_argument("--max-pages", type=int, default=12)
     parser.add_argument(
         "--no-details",
         action="store_true",

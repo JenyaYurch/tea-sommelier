@@ -6,6 +6,8 @@ This directory contains evaluation datasets for testing agent behavior.
 - `week2-dataset.json` — week 2 cases: shop (`gift_under_20_eur`, `partner_shop_showcase`),
   brewing (`brew_mug_only`), onboarding (`onboarding_new_user`),
   next-step chips (`next_steps_three_recs`).
+- `tea-types-dataset.json` — TEA-23: mixed cart + white/yellow/red/puerh/GABA cases.
+- `mixed-order-case.json` — TEA-23 acceptance slice (mixed cart only, for quota-friendly generate).
 
 ## Running Evaluations
 

@@ -1,4 +1,4 @@
-"""Local slug dictionary for Chinese green teas (tea.support)."""
+"""Local slug dictionary for Chinese teas in tea.support (v1 types)."""
 
 from __future__ import annotations
 
@@ -123,9 +123,11 @@ EXTRA_ALIASES: dict[str, list[str]] = {
         "银丝绿茶",
     ],
     "moli-longzhu": [
+        "Моли Лун Чжу",
         "Жасминовая Жемчужина Дракона",
         "Бай Лун Чжу",
         "Белая Жемчужина Дракона",
+        "Жасмин",
         "Moli Longzhu",
         "茉莉龙珠",
     ],
@@ -154,15 +156,89 @@ EXTRA_ALIASES: dict[str, list[str]] = {
         "Зеленая жемчужина",
         "珠茶",
     ],
+    "bai-mudan": [
+        "Бай Му Дань",
+        "Баймудань",
+        "Bai Mudan",
+        "Bai Mu Dan",
+        "White Peony",
+        "白牡丹",
+    ],
+    "baihao-yinzhen": [
+        "Инь Чжэнь",
+        "Бай Хао Инь Чжэнь",
+        "Байхао Иньчжэнь",
+        "Baihao Yinzhen",
+        "Bai Hao Yin Zhen",
+        "Silver Needle",
+        "白毫银针",
+    ],
+    "junshan-yin-zhen": [
+        "Цзюнь Шань Инь Чжэнь",
+        "Цзюньшань Инь Чжэнь",
+        "Junshan Yinzhen",
+        "Jun Shan Yin Zhen",
+        "君山银针",
+    ],
+    "dianhong-gongfu": [
+        "Дянь Хун",
+        "Дяньхун",
+        "Дянь Хун Гунфу",
+        "Dian Hong",
+        "Dianhong",
+        "Dian Hong Gongfu",
+        "滇红工夫",
+        "滇红",
+    ],
+    "dianhong-ye-sheng": [
+        "Дянь Хун Е Шен",
+        "Dianhong Ye Sheng",
+    ],
+    "chi-gan-xiao-zhong": [
+        "Ю Лань Чи Гань",
+        "Чи Гань",
+        "Чи Гань Сяо Чжун",
+        "Chi Gan Xiaozhong",
+        "赤甘小种",
+    ],
+    "7542": [
+        "шен пуэр",
+        "шэн пуэр",
+        "шен пуер",
+        "шэн пуер",
+        "sheng puerh",
+        "sheng pu-erh",
+        "sheng puer",
+        "raw puerh",
+        "сырьевой пуэр",
+    ],
+    "7572-shu-bing": [
+        "шу пуэр",
+        "шу пуер",
+        "shu puerh",
+        "shu pu-erh",
+        "shu puer",
+        "ripe puerh",
+        "готовый пуэр",
+        "7572",
+    ],
+    "dong-ding-wulong": [
+        "Дун Дин",
+        "Дундин",
+        "Дун Дин Улун",
+        "Dong Ding",
+        "Tung Ting",
+        "凍頂烏龍",
+        "冻顶乌龙",
+    ],
 }
 
 
 def _data_path() -> Path:
     here = Path(__file__).resolve()
-    candidates = [
-        here.parent.parent / "data" / "green_teas_slugs.json",
-        here.parent / "data" / "green_teas_slugs.json",
-    ]
+    names = ("tea_slugs.json", "green_teas_slugs.json")
+    bases = (here.parent.parent / "data", here.parent / "data")
+    candidates = [base / name for name in names for base in bases]
     for path in candidates:
         if path.exists():
             return path
@@ -202,8 +278,14 @@ def load_teas() -> list[dict[str, Any]]:
     return teas
 
 
-def china_green_slugs() -> set[str]:
+def known_tea_slugs() -> set[str]:
+    """Allow-list of tea.support slugs in the local encyclopedia."""
     return {tea["slug"] for tea in load_teas()}
+
+
+def china_green_slugs() -> set[str]:
+    """Backward-compatible alias of known_tea_slugs (no longer green-only)."""
+    return known_tea_slugs()
 
 
 def resolve_query(query: str, limit: int) -> list[dict[str, Any]]:
@@ -233,9 +315,8 @@ def resolve_query(query: str, limit: int) -> list[dict[str, Any]]:
         if score == 0:
             tokens = set(needle.split())
             hay = set(" ".join(folded_parts).split())
-            overlap = tokens & hay
-            if overlap and len(overlap) >= max(1, len(tokens) - 1):
-                score = 40 + 10 * len(overlap)
+            if tokens and tokens <= hay:
+                score = 40 + 10 * len(tokens)
         if score:
             scored.append(
                 (
@@ -246,6 +327,7 @@ def resolve_query(query: str, limit: int) -> list[dict[str, Any]]:
                         "name_ru": tea.get("name_ru"),
                         "name_zh": tea.get("name_zh"),
                         "pinyin": tea.get("pinyin"),
+                        "tea_type": tea.get("tea_type"),
                         "score": score,
                     },
                 )

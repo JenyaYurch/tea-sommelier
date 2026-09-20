@@ -32,6 +32,7 @@ def _clear_backends(monkeypatch) -> None:
     monkeypatch.delenv("SESSION_DB_PASSWORD", raising=False)
     monkeypatch.delenv("GOOGLE_CLOUD_AGENT_ENGINE_ID", raising=False)
     monkeypatch.delenv(CLOUD_RUN_SERVICE_ENV, raising=False)
+    monkeypatch.delenv("TEA_ALLOW_EPHEMERAL_SESSIONS", raising=False)
 
 
 def test_retryable_db_errors() -> None:
@@ -110,6 +111,18 @@ def test_cloud_run_without_backend_raises(monkeypatch) -> None:
         _reset()
 
 
+def test_cloud_run_ephemeral_flag_uses_in_memory(monkeypatch) -> None:
+    _clear_backends(monkeypatch)
+    monkeypatch.setenv(CLOUD_RUN_SERVICE_ENV, "tea-agent")
+    monkeypatch.setenv("TEA_ALLOW_EPHEMERAL_SESSIONS", "true")
+    _reset()
+    try:
+        service = services.get_session_service()
+        assert isinstance(service, InMemorySessionService)
+    finally:
+        _reset()
+
+
 def test_cloud_run_rejects_sqlite_uri(monkeypatch) -> None:
     _clear_backends(monkeypatch)
     monkeypatch.setenv(CLOUD_RUN_SERVICE_ENV, "tea-agent")
@@ -118,6 +131,25 @@ def test_cloud_run_rejects_sqlite_uri(monkeypatch) -> None:
     try:
         with pytest.raises(RuntimeError, match="sqlite is ephemeral"):
             services.get_session_service()
+    finally:
+        _reset()
+
+
+def test_cloud_run_ephemeral_flag_allows_sqlite_uri(monkeypatch) -> None:
+    sentinel = object()
+
+    def fake_create(*, base_dir, session_service_uri, session_db_kwargs=None, **kwargs):
+        assert session_service_uri == LOCAL_SQLITE_URI
+        return sentinel
+
+    _clear_backends(monkeypatch)
+    monkeypatch.setenv(CLOUD_RUN_SERVICE_ENV, "tea-agent")
+    monkeypatch.setenv("TEA_ALLOW_EPHEMERAL_SESSIONS", "1")
+    monkeypatch.setenv("SESSION_SERVICE_URI", LOCAL_SQLITE_URI)
+    monkeypatch.setattr(services, "create_session_service_from_options", fake_create)
+    _reset()
+    try:
+        assert services.get_session_service() is sentinel
     finally:
         _reset()
 

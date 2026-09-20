@@ -72,6 +72,10 @@ You can also use features from the [ADK](https://adk.dev/) CLI with `uv run adk`
 
 Edit your agent logic in `tea_agent/agent.py` and test with `agents-cli playground` - it auto-reloads on save.
 
+## How to run, deploy, and check status
+
+Full operational guide (local run, Cloud Run deploy, logs, eval, catalog refresh, optional Cloud SQL / Memory Bank): [docs/HOW_TO.md](docs/HOW_TO.md).
+
 ## Telegram
 
 Local polling (process must stay running):
@@ -84,12 +88,11 @@ Production is two Cloud Run services (`tea-agent` + `telegram-integration`) in `
 
 ```bash
 uv run python scripts/setup_secret_manager.py
-uv run python scripts/setup_cloud_sql.py
 uv run python scripts/deploy_cloud_run.py
 uv run python scripts/deploy_cloud_run.py --execute
 ```
 
-`--execute` provisions Cloud SQL `tea-sessions` if neither `CLOUD_SQL_INSTANCE` nor `GOOGLE_CLOUD_AGENT_ENGINE_ID` is set, deploys `tea-agent` as `SESSION_DB_USER=postgres` (POSTGRES_17 public schema owner, so `prepare_tables` can CREATE), then proves TEA-14 (`verify_session_persistence.py --write`, a new revision, `--check`) before deploying `telegram-integration`. Telegram taste profiles survive Cloud Run restarts with Cloud SQL (`SESSION_DB_PASSWORD` in Secret Manager) or Agent Engine sessions. Cloud Run refuses in-memory and sqlite (container disk is ephemeral). Local polling defaults to `SESSION_SERVICE_URI=sqlite+aiosqlite:///./sessions.db`. Do not run local polling and the webhook at the same time (Telegram allows one getUpdates client).
+`--execute` deploys without Memory Bank and without Cloud SQL unless `GOOGLE_CLOUD_AGENT_ENGINE_ID` or `CLOUD_SQL_INSTANCE` is already set. Default `tea-agent` gets `TEA_ALLOW_EPHEMERAL_SESSIONS=true` and `--clear-cloudsql-instances`. Taste profiles live in memory and reset on scale-to-zero or a new revision. Optional TEA-14 persistence: `uv run python scripts/setup_cloud_sql.py --execute`, set `CLOUD_SQL_INSTANCE`, then redeploy. Cloud Run still refuses sqlite/in-memory when that flag is unset. Local polling defaults to `SESSION_SERVICE_URI=sqlite+aiosqlite:///./sessions.db`. Do not run local polling and the webhook at the same time (Telegram allows one getUpdates client).
 
 ## Deployment
 

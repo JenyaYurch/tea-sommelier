@@ -1,8 +1,10 @@
 """Two-stage Cloud Run deploy for tea-agent + telegram-integration (TEA-13/TEA-14).
 
 Does not deploy unless you pass --execute (explicit approval).
-If Cloud SQL and Agent Engine are unset, --execute creates Cloud SQL
-``tea-sessions``, deploys, then write/restart/check so taste profiles survive.
+Default is the cheap path: no Memory Bank, no Cloud SQL. Sessions are
+in-memory (``TEA_ALLOW_EPHEMERAL_SESSIONS``); taste profiles reset on
+scale-to-zero / a new revision. Set ``CLOUD_SQL_INSTANCE`` or
+``GOOGLE_CLOUD_AGENT_ENGINE_ID`` to attach a persistent backend instead.
 
 Usage:
     uv run python scripts/deploy_cloud_run.py
@@ -23,7 +25,6 @@ from telegram_integration.deploy_spec import (
     ADK_APP_NAME,
     AGENT_SERVICE,
     CLOUD_RUN_REGION,
-    CLOUD_SQL_INSTANCE_NAME,
     DEFAULT_PROJECT,
     DEFAULT_SESSION_DB_NAME,
     DEFAULT_SESSION_DB_USER,
@@ -164,8 +165,8 @@ def _ensure_session_backend(
 ) -> tuple[str | None, str | None, str | None, str, str]:
     """Return engine_id, engine_location, cloud_sql, db user, db name.
 
-    --execute with no backend creates Cloud SQL ``tea-sessions`` so a restart
-    cannot silently drop Telegram taste profiles.
+    Default deploy does not create Cloud SQL. Pass provision=True only when
+    opting into TEA-14 persistence.
     """
     engine_id, engine_location = _agent_engine_env()
     cloud_sql, user, database = _normalized_cloud_sql(project, region)
@@ -197,6 +198,8 @@ def _print_plan(project: str, region: str) -> None:
         print(f"  Memory Bank engine: {engine_id}")
         if engine_location:
             print(f"  Memory Bank location: {engine_location}")
+    else:
+        print("  Memory Bank: off (no GOOGLE_CLOUD_AGENT_ENGINE_ID)")
     if cloud_sql:
         print(f"  Cloud SQL sessions: {cloud_sql}")
         print(f"  Session DB: {session_user}@{session_db}")
@@ -204,12 +207,11 @@ def _print_plan(project: str, region: str) -> None:
     elif engine_id:
         print("  Sessions: Agent Engine (GOOGLE_CLOUD_AGENT_ENGINE_ID)")
     else:
-        cloud_sql = f"{project}:{region}:{CLOUD_SQL_INSTANCE_NAME}"
         print(
-            f"  Sessions: --execute will CREATE Cloud SQL {CLOUD_SQL_INSTANCE_NAME} "
-            f"({cloud_sql}, POSTGRES_17, db-f1-micro, zonal), then deploy and verify"
+            "  Sessions: in-memory (TEA_ALLOW_EPHEMERAL_SESSIONS). "
+            "Taste profiles reset on scale-to-zero / new revision. "
+            "Will not create Cloud SQL tea-sessions."
         )
-        print(f"  Session DB: {session_user}@{session_db}")
     print()
     print(
         "1. gcloud",
@@ -223,13 +225,21 @@ def _print_plan(project: str, region: str) -> None:
             session_db_name=session_db,
         ),
     )
-    print()
-    print("2. verify_session_persistence.py --write against tea-agent URL")
-    print("3. gcloud", *agent_restart_args(project=project, region=region, probe="<ts>"))
-    print("4. verify_session_persistence.py --check after the new revision")
+    step = 2
+    if cloud_sql or engine_id:
+        print()
+        print(f"{step}. verify_session_persistence.py --write against tea-agent URL")
+        step += 1
+        print(
+            f"{step}. gcloud",
+            *agent_restart_args(project=project, region=region, probe="<ts>"),
+        )
+        step += 1
+        print(f"{step}. verify_session_persistence.py --check after the new revision")
+        step += 1
     print()
     print(
-        "5. gcloud",
+        f"{step}. gcloud",
         *telegram_deploy_args(
             project=project,
             region=region,
@@ -239,7 +249,7 @@ def _print_plan(project: str, region: str) -> None:
     )
     print()
     print(
-        "6. gcloud",
+        f"{step + 1}. gcloud",
         *telegram_update_env_args(
             project=project,
             region=region,
@@ -420,10 +430,8 @@ def _execute(project: str, region: str, *, skip_verify: bool = False) -> None:
     _enable_apis(project)
     _grant_builder_role(project)
     engine_id, engine_location, cloud_sql, session_user, session_db = (
-        _ensure_session_backend(project, region, provision=True)
+        _ensure_session_backend(project, region, provision=False)
     )
-    if not cloud_sql and not engine_id:
-        _fail("Session backend missing after Cloud SQL provision")
     extra_secrets = ("SESSION_DB_PASSWORD",) if cloud_sql else ()
     _grant_secret_access(project, extra_secrets)
     if cloud_sql:
@@ -444,8 +452,14 @@ def _execute(project: str, region: str, *, skip_verify: bool = False) -> None:
     )
     agent_url = _service_url(project, region, AGENT_SERVICE)
     print(f"tea-agent URL: {agent_url}")
-    if skip_verify:
-        print("Skipping TEA-14 session verify (--skip-verify).")
+    has_persistent = bool(cloud_sql or engine_id)
+    if skip_verify or not has_persistent:
+        reason = (
+            "--skip-verify"
+            if skip_verify
+            else "in-memory sessions; profiles do not survive restarts"
+        )
+        print(f"Skipping TEA-14 session verify ({reason}).")
     else:
         # Prove Cloud SQL/Agent Engine before Telegram deploy, so a missing
         # TELEGRAM_BOT_TOKEN cannot skip the restart check.

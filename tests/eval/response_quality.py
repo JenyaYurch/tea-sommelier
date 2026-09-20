@@ -46,6 +46,14 @@ def evaluate(instance):
         "lists next-step options мягче / дешевле / без горечи / подарок / "
         "подробнее, and Купить must be a markdown link to product_url from "
         "find_in_shop (teashop.by catalog) — never an invented URL.\n"
+        "- For mixed-order / cart prompts that list several named teas: the agent "
+        "must cover each named item (not refuse as green-only / out of specialty); "
+        "must not force exactly 3 recommendations; facts of taste/terroir/temp "
+        "only from tools; if a tea.support card is missing, say there is no data "
+        "instead of inventing an encyclopedia entry.\n"
+        "- GABA is not a tea.support tea_type: do not invent brewing numbers.\n"
+        "- Brewing for shu/sheng/red/white must come from get_tea_card, not a "
+        "green-tea 75–80 °C default.\n"
         "Penalize empty replies, hallucinated cultivars, or medical advice.\n"
     )
     reference = instance.get("reference")
@@ -55,7 +63,8 @@ def evaluate(instance):
             "factual disagreement with it."
         )
     prompt = (
-        f"You are an expert QA evaluator for a Chinese-green-tea sommelier. {rubric}\n"
+        f"You are an expert QA evaluator for a Chinese-tea sommelier "
+        f"(green, white, yellow, red, puerh, GABA — not green-only). {rubric}\n"
         f"User Prompt: {prompt_text}\n"
         f"Final Response: {instance.get('response', '')}\n"
     )

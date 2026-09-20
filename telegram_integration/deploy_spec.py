@@ -7,7 +7,10 @@ because SERVICE_URL is unknown until the first revision exists
 
 from __future__ import annotations
 
-from tea_agent.app_utils.session_uri import normalize_cloud_sql_instance
+from tea_agent.app_utils.session_uri import (
+    EPHEMERAL_SESSIONS_ENV,
+    normalize_cloud_sql_instance,
+)
 
 DEFAULT_PROJECT = "gen-lang-client-0393777014"
 CLOUD_RUN_REGION = "europe-central2"
@@ -74,6 +77,8 @@ def agent_env_vars(
         parts.append(
             f"SESSION_DB_NAME={(session_db_name or DEFAULT_SESSION_DB_NAME).strip()}"
         )
+    elif not engine_id:
+        parts.append(f"{EPHEMERAL_SESSIONS_ENV}=true")
     return ",".join(parts)
 
 
@@ -140,6 +145,8 @@ def agent_deploy_args(
     ]
     if instance:
         args.append(f"--set-cloudsql-instances={instance}")
+    else:
+        args.append("--clear-cloudsql-instances")
     args.append("--quiet")
     return args
 

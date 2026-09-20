@@ -6,8 +6,9 @@ when ``GOOGLE_CLOUD_AGENT_ENGINE_ID`` is set. Local/dev may use SQLite.
 
 Telegram ids are hyphenated (``tg-{id}`` / ``tg-sess-{id}``) so they match
 Agent Platform custom session ids (``[a-z0-9-]``, start with a letter).
-Cloud Run (``K_SERVICE``) refuses in-memory so a restart cannot silently drop
-taste profiles.
+Cloud Run (``K_SERVICE``) refuses in-memory unless
+``TEA_ALLOW_EPHEMERAL_SESSIONS`` is set (cheap deploy: profiles reset on
+scale-to-zero / new revision).
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ DEFAULT_DB_NAME = "tea_sessions"
 DEFAULT_SOCKET_DIR = "/cloudsql"
 DEFAULT_CLOUD_SQL_REGION = "europe-central2"
 CLOUD_RUN_SERVICE_ENV = "K_SERVICE"
+EPHEMERAL_SESSIONS_ENV = "TEA_ALLOW_EPHEMERAL_SESSIONS"
 
 
 def cloud_sql_socket_dir() -> str:
@@ -79,6 +81,12 @@ def cloud_sql_instance_from_env() -> str:
 
 def agent_engine_id_from_env() -> str:
     return (os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID") or "").strip()
+
+
+def allow_ephemeral_sessions() -> bool:
+    """True when Cloud Run may use in-memory/sqlite (taste profiles will not persist)."""
+    raw = (os.environ.get(EPHEMERAL_SESSIONS_ENV) or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def is_ephemeral_session_uri(uri: str) -> bool:

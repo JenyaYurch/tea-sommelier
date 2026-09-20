@@ -20,7 +20,7 @@ is visible to the others.
 
 Sessions (TEA-14) use Cloud SQL, Agent Engine, or SQLite via
 ``SESSION_SERVICE_URI`` / ``CLOUD_SQL_INSTANCE`` / ``GOOGLE_CLOUD_AGENT_ENGINE_ID``.
-Cloud Run refuses in-memory so a restart cannot silently drop taste profiles.
+Cloud Run refuses in-memory unless ``TEA_ALLOW_EPHEMERAL_SESSIONS`` is set.
 """
 
 from __future__ import annotations
@@ -40,6 +40,7 @@ from google.adk.cli.utils.service_factory import (
 from tea_agent.app_utils.session_uri import (
     CLOUD_RUN_SERVICE_ENV,
     agent_engine_id_from_env,
+    allow_ephemeral_sessions,
     is_ephemeral_session_uri,
     missing_persistent_backend_error,
     postgres_engine_kwargs,
@@ -62,7 +63,11 @@ _AGENT_DIR = os.path.dirname(
 def get_session_service():
     """Process-wide session service shared across every serving surface."""
     if uri := resolve_session_service_uri():
-        if os.environ.get(CLOUD_RUN_SERVICE_ENV) and is_ephemeral_session_uri(uri):
+        if (
+            os.environ.get(CLOUD_RUN_SERVICE_ENV)
+            and is_ephemeral_session_uri(uri)
+            and not allow_ephemeral_sessions()
+        ):
             raise missing_persistent_backend_error()
         kwargs = postgres_engine_kwargs(uri)
         return create_session_service_from_options(
@@ -78,7 +83,7 @@ def get_session_service():
             location=_agent_engine_location(),
             agent_engine_id=agent_engine_id,
         )
-    if os.environ.get(CLOUD_RUN_SERVICE_ENV):
+    if os.environ.get(CLOUD_RUN_SERVICE_ENV) and not allow_ephemeral_sessions():
         raise missing_persistent_backend_error()
     from google.adk.sessions.in_memory_session_service import InMemorySessionService
 

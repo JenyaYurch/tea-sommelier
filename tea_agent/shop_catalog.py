@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from tea_agent.slug_index import china_green_slugs, fold_text, resolve_query
+from tea_agent.slug_index import fold_text, known_tea_slugs, resolve_query
 
 # Refresh cadence for the partner feed (TEA-19).
 REFRESH_INTERVAL_DAYS = 14
@@ -19,6 +19,7 @@ URL_SLUG_OVERRIDES: dict[str, tuple[str, str]] = {
     "yunnan-maofen-tou-chun": ("yun-nan-mao-feng", "high"),
     "maofeng": ("yun-nan-mao-feng", "high"),
     "junnan-jun-u": ("yun-wu-lu-cha", "medium"),
+    "sjao-chzhun-hua-sjan": ("chi-gan-xiao-zhong", "high"),
 }
 
 
@@ -98,13 +99,13 @@ def match_product_to_slug(
     product_name: str,
     product_url: str | None = None,
 ) -> tuple[str | None, str]:
-    """Map a shop product to a China-green tea.support slug."""
+    """Map a shop product to a tea.support slug from the local encyclopedia."""
     url_key = _product_url_key(product_url)
     if url_key in URL_SLUG_OVERRIDES:
         return URL_SLUG_OVERRIDES[url_key]
 
     matches = resolve_query(product_name, limit=3)
-    allowed = china_green_slugs()
+    allowed = known_tea_slugs()
     for row in matches:
         slug = str(row.get("slug") or "")
         score = int(row.get("score") or 0)
@@ -137,6 +138,11 @@ def remap_unmatched_items(items: list[dict[str, Any]]) -> int:
     return filled
 
 
+def _shop_fold(value: str) -> str:
+    """Fold shop text; treat Latin GABA and Cyrillic габа as the same token."""
+    return fold_text(value).replace("gaba", "габа")
+
+
 def find_products(
     *,
     slug: str | None = None,
@@ -149,7 +155,7 @@ def find_products(
         return []
 
     slug_n = (slug or "").strip().lower() or None
-    needle = fold_text(query or "")
+    needle = _shop_fold(query or "")
     scored: list[tuple[int, dict[str, Any]]] = []
 
     for item in items:
@@ -157,16 +163,18 @@ def find_products(
         matched = (item.get("matched_slug") or "").strip().lower()
         if slug_n and matched == slug_n:
             score = max(score, 100)
-        name = fold_text(str(item.get("product_name") or ""))
-        if needle and name:
+        name = _shop_fold(str(item.get("product_name") or ""))
+        url_fold = _shop_fold(_product_url_key(item.get("product_url")).replace("-", " "))
+        hay = " ".join(part for part in (name, url_fold) if part)
+        if needle and hay:
             if needle == name:
                 score = max(score, 95)
-            elif needle in name or name in needle:
-                score = max(score, 75 if min(len(needle), len(name)) >= 4 else 45)
+            elif needle in hay or (name and name in needle):
+                score = max(score, 75 if min(len(needle), len(hay)) >= 4 else 45)
             else:
                 tokens = set(needle.split())
-                hay = set(name.split())
-                overlap = tokens & hay
+                hay_tokens = set(hay.split())
+                overlap = tokens & hay_tokens
                 if overlap and len(overlap) >= max(1, len(tokens) - 1):
                     score = max(score, 40 + 10 * len(overlap))
         if score:

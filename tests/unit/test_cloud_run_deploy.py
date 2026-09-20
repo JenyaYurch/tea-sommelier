@@ -72,7 +72,9 @@ def test_agent_deploy_uses_secret_manager_not_plaintext_key() -> None:
     assert "--execution-environment=gen2" in args
     assert "GOOGLE_CLOUD_AGENT_ENGINE_ID=" not in joined
     assert "--add-cloudsql-instances" not in joined
-    assert "--set-cloudsql-instances" not in joined
+    assert "--set-cloudsql-instances=" not in joined
+    assert "--clear-cloudsql-instances" in args
+    assert "TEA_ALLOW_EPHEMERAL_SESSIONS=true" in joined
     assert "SESSION_DB_PASSWORD" not in joined
 
 
@@ -85,6 +87,7 @@ def test_agent_deploy_passes_memory_bank_engine_when_set() -> None:
     env = next(item for item in args if item.startswith("--set-env-vars="))
     assert "GOOGLE_CLOUD_AGENT_ENGINE_ID=engine-123" in env
     assert "GOOGLE_CLOUD_AGENT_ENGINE_LOCATION=eu" in env
+    assert "TEA_ALLOW_EPHEMERAL_SESSIONS" not in env
 
 
 def test_agent_deploy_adds_cloud_sql_socket_without_db_password() -> None:
@@ -102,6 +105,8 @@ def test_agent_deploy_adds_cloud_sql_socket_without_db_password() -> None:
     assert "SESSION_DB_USER=tea_agent" in env
     assert "SESSION_DB_NAME=tea_sessions" in env
     assert "SESSION_DB_PASSWORD=SESSION_DB_PASSWORD:latest" in secrets
+    assert "TEA_ALLOW_EPHEMERAL_SESSIONS" not in env
+    assert "--clear-cloudsql-instances" not in args
     assert "postgresql+" not in joined
     assert "s3cret" not in joined
     assert "@/" not in joined
@@ -252,7 +257,7 @@ def test_dry_run_plan_includes_write_restart_check(capsys, monkeypatch) -> None:
     assert "--check" in out
 
 
-def test_dry_run_plan_says_execute_will_create_cloud_sql(capsys, monkeypatch) -> None:
+def test_dry_run_plan_says_ephemeral_sessions_not_create_sql(capsys, monkeypatch) -> None:
     mod = _load_deploy_module()
     monkeypatch.setattr(mod, "_agent_engine_env", lambda: (None, None))
     monkeypatch.setattr(
@@ -260,10 +265,13 @@ def test_dry_run_plan_says_execute_will_create_cloud_sql(capsys, monkeypatch) ->
     )
     mod._print_plan("demo-proj", "europe-central2")
     out = capsys.readouterr().out
-    assert "will CREATE Cloud SQL tea-sessions" in out
-    assert "demo-proj:europe-central2:tea-sessions" in out
-    assert "--set-cloudsql-instances=demo-proj:europe-central2:tea-sessions" in out
-    assert "--write" in out
+    assert "will CREATE Cloud SQL" not in out
+    assert "Memory Bank: off" in out
+    assert "TEA_ALLOW_EPHEMERAL_SESSIONS" in out
+    assert "Will not create Cloud SQL tea-sessions" in out
+    assert "--clear-cloudsql-instances" in out
+    assert "--set-cloudsql-instances=" not in out
+    assert "verify_session_persistence.py --write" not in out
 
 
 def test_verify_after_deploy_writes_restarts_and_checks(monkeypatch) -> None:
@@ -340,6 +348,49 @@ def test_execute_verifies_tea_agent_before_telegram(monkeypatch) -> None:
     assert order.index("iam-wait") < order.index("tea-agent")
     assert order.index("tea-agent") < order.index("verify")
     assert order.index("verify") < order.index(
+        "telegram-integration stage 1 (placeholder SERVICE_URL)"
+    )
+
+
+def test_execute_skips_verify_without_persistent_backend(monkeypatch) -> None:
+    mod = _load_deploy_module()
+    order: list[str] = []
+
+    class Proc:
+        returncode = 0
+        stdout = "https://tea-agent.example"
+        stderr = ""
+
+    def fake_ensure(project, region, *, provision):
+        assert provision is False
+        return None, None, None, "postgres", "tea_sessions"
+
+    def no_sql(project):
+        raise AssertionError("must not grant Cloud SQL")
+
+    def no_verify(*args, **kwargs):
+        raise AssertionError("must not verify persistence")
+
+    monkeypatch.setattr(mod, "_gcloud", lambda args: Proc())
+    monkeypatch.setattr(mod, "_enable_apis", lambda project: order.append("apis"))
+    monkeypatch.setattr(mod, "_grant_builder_role", lambda project: order.append("builder"))
+    monkeypatch.setattr(mod, "_ensure_session_backend", fake_ensure)
+    monkeypatch.setattr(
+        mod, "_grant_secret_access", lambda project, extra=(): order.append(("secrets", extra))
+    )
+    monkeypatch.setattr(mod, "_grant_cloudsql_client", no_sql)
+    monkeypatch.setattr(mod, "_wait_for_iam", lambda: order.append("iam-wait"))
+    monkeypatch.setattr(mod, "_run_step", lambda label, args: order.append(label) or Proc())
+    monkeypatch.setattr(
+        mod, "_service_url", lambda project, region, service: f"https://{service}.example"
+    )
+    monkeypatch.setattr(mod, "_verify_after_deploy", no_verify)
+    mod._execute("demo-proj", "europe-central2")
+    assert ("secrets", ()) in order
+    assert "sql" not in order
+    assert "iam-wait" not in order
+    assert "tea-agent" in order
+    assert order.index("tea-agent") < order.index(
         "telegram-integration stage 1 (placeholder SERVICE_URL)"
     )
 

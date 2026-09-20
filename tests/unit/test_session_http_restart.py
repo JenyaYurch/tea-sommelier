@@ -42,6 +42,7 @@ def _base_env() -> dict[str, str]:
     env.pop("CLOUD_SQL_SOCKET_DIR", None)
     env.pop("SESSION_DB_PASSWORD", None)
     env.pop("GOOGLE_CLOUD_AGENT_ENGINE_ID", None)
+    env.pop("TEA_ALLOW_EPHEMERAL_SESSIONS", None)
     return env
 
 

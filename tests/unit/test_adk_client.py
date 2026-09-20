@@ -6,9 +6,17 @@ import httpx
 import pytest
 
 from telegram_integration.adk_client import (
+    TEA_AGENT_ERROR,
+    TEA_COLD_START,
+    TEA_QUOTA,
+    TEA_SESSION_FAILED,
+    TEA_TIMEOUT_RUN,
+    TEA_UNAVAILABLE,
     AdkClientError,
     AdkHttpClient,
     AdkQuotaError,
+    AdkTimeoutError,
+    AdkUnavailableError,
     extract_reply_text,
     normalize_adk_base_url,
 )
@@ -116,5 +124,101 @@ async def test_ask_server_error() -> None:
             return httpx.Response(200, json={"id": "s"})
         return httpx.Response(503, text="down")
 
-    with pytest.raises(AdkClientError):
+    with pytest.raises(AdkUnavailableError) as exc:
         await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+    assert exc.value.error_code == TEA_UNAVAILABLE
+    assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_ask_quota_sets_error_code() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": "s"})
+        return httpx.Response(429, text="RESOURCE_EXHAUSTED")
+
+    with pytest.raises(AdkQuotaError) as exc:
+        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+    assert exc.value.error_code == TEA_QUOTA
+    assert exc.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_session_get_timeout_is_cold_start() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    with pytest.raises(AdkTimeoutError) as exc:
+        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+    assert exc.value.error_code == TEA_COLD_START
+
+
+@pytest.mark.asyncio
+async def test_session_create_timeout_is_cold_start() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(404, text="missing")
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    with pytest.raises(AdkTimeoutError) as exc:
+        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+    assert exc.value.error_code == TEA_COLD_START
+
+
+@pytest.mark.asyncio
+async def test_run_timeout_is_timeout_run() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": "s"})
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    with pytest.raises(AdkTimeoutError) as exc:
+        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+    assert exc.value.error_code == TEA_TIMEOUT_RUN
+
+
+@pytest.mark.asyncio
+async def test_connect_error_is_unavailable() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    with pytest.raises(AdkUnavailableError) as exc:
+        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+    assert exc.value.error_code == TEA_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_run_500_is_agent_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": "s"})
+        return httpx.Response(500, text="boom")
+
+    with pytest.raises(AdkClientError) as exc:
+        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+    assert exc.value.error_code == TEA_AGENT_ERROR
+    assert exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_session_check_500_is_session_failed() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="session down")
+
+    with pytest.raises(AdkClientError) as exc:
+        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+    assert exc.value.error_code == TEA_SESSION_FAILED
+    assert exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_session_create_502_is_unavailable() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(404, text="missing")
+        return httpx.Response(502, text="bad gateway")
+
+    with pytest.raises(AdkUnavailableError) as exc:
+        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+    assert exc.value.error_code == TEA_UNAVAILABLE
+    assert exc.value.status_code == 502

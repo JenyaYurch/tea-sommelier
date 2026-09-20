@@ -10,6 +10,7 @@ from tea_agent.shop_catalog import (
     catalog_freshness,
     catalog_meta,
     find_products,
+    load_catalog,
     match_product_to_slug,
     parse_price_byn,
     reload_catalog,
@@ -55,7 +56,21 @@ def test_match_product_to_slug_chinese_greens() -> None:
         assert confidence in {"high", "medium"}
 
 
-def test_match_product_skips_non_china_green() -> None:
+def test_match_product_maps_new_types() -> None:
+    cases = [
+        ("Бай Му Дань", "bai-mudan"),
+        ("Красный чай Чан Син «Лесной Дянь Хун», 2026 год", "dianhong-gongfu"),
+        ("Цзюнь Шань Инь Чжэнь", "junshan-yin-zhen"),
+        ("Конкурсный Лу Гу Дун Дин, 2026 г.", "dong-ding-wulong"),
+        ("Ю Лань Чи Гань", "chi-gan-xiao-zhong"),
+    ]
+    for name, expected in cases:
+        slug, confidence = match_product_to_slug(name)
+        assert slug == expected, (name, slug, confidence)
+        assert confidence in {"high", "medium"}
+
+
+def test_match_product_skips_non_encyclopedia() -> None:
     for name in [
         "Чайный сет «Светлые»",
         "Чай зелёный «Асамуши сенча» (AS), High-grade",
@@ -188,6 +203,21 @@ def test_real_catalog_find_in_shop_mapped_slugs() -> None:
         assert result["status"] == "success", slug
         assert result["products"][0]["product_url"]
         assert result["products"][0]["matched_slug"] == slug
+
+
+def test_real_catalog_finds_new_types_by_query() -> None:
+    reload_catalog()
+    for query in ("Дянь Хун", "GABA", "габа", "пуэр", "Ю Лань Чи Гань", "Е Шен Сычуань"):
+        result = find_in_shop(query=query)
+        assert result["status"] == "success", query
+        assert result["products"][0]["product_url"]
+
+
+def test_catalog_covers_v1_categories() -> None:
+    reload_catalog()
+    urls = " ".join(str(item.get("category_url") or "") for item in load_catalog())
+    for fragment in ("beliy", "zheltiy", "zeleniy", "cherniy", "puer", "gaba"):
+        assert fragment in urls, fragment
 
 
 def test_catalog_meta_reads_last_checked(tmp_path: Path, monkeypatch) -> None:
