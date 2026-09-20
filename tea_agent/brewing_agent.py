@@ -8,7 +8,7 @@ from google.genai import types
 
 from tea_agent.tools import get_tea_card, resolve_tea
 
-MODEL = os.environ.get("TEA_AGENT_MODEL", "gemini-3.6-flash")
+MODEL = os.environ.get("TEA_AGENT_MODEL", "gemini-3.1-flash-lite")
 
 BREWING_INSTRUCTION = """
 Ты — специалист по заварке китайского чая (зелёный, белый, жёлтый, красный, шен/шу пуэр, GABA, улун если есть карточка).

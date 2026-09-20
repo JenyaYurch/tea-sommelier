@@ -32,7 +32,7 @@ Telegram allows **one** getUpdates client. Do not run local polling while the Cl
 | Telegram service | `telegram-integration` |
 | ADK app name | `tea_agent` |
 | Gemini (local + Cloud Run) | `GOOGLE_GENAI_USE_VERTEXAI=false` (AI Studio, not Vertex) |
-| Model | `gemini-3.6-flash` unless `TEA_AGENT_MODEL` is set |
+| Model | `gemini-3.1-flash-lite` unless `TEA_AGENT_MODEL` is set |
 
 Billing is already attached on this project. Do **not** start a new Free Trial.
 
@@ -66,7 +66,7 @@ Optional:
 
 | Variable | Purpose |
 | --- | --- |
-| `TEA_AGENT_MODEL` | Override model if daily flash quota is exhausted (e.g. `gemini-3.1-flash-lite`) |
+| `TEA_AGENT_MODEL` | Override model (default `gemini-3.1-flash-lite`; use `gemini-3.6-flash` on a paid Gemini API tier) |
 | `GOOGLE_CLOUD_PROJECT` | Used by some eval tooling; a placeholder like `teabot-local-eval` is enough locally |
 | `SESSION_SERVICE_URI` | Local sessions; polling defaults to sqlite `./sessions.db` |
 | `CLOUD_SQL_INSTANCE` | **Do not set** unless you want to pay for Postgres |
@@ -215,7 +215,7 @@ gcloud run services describe telegram-integration --project=gen-lang-client-0393
 
 Confirm:
 
-- `tea-agent` env has `GOOGLE_GENAI_USE_VERTEXAI=false` and, on the cheap path, `TEA_ALLOW_EPHEMERAL_SESSIONS=true`.
+- `tea-agent` env has `GOOGLE_GENAI_USE_VERTEXAI=false`, `TEA_AGENT_MODEL=gemini-3.1-flash-lite`, and, on the cheap path, `TEA_ALLOW_EPHEMERAL_SESSIONS=true`.
 - No `CLOUD_SQL_INSTANCE` and no `GOOGLE_CLOUD_AGENT_ENGINE_ID` unless you opted in.
 - Telegram `ADK_SERVER_URL` equals the tea-agent URL.
 - Telegram `SERVICE_URL` equals the telegram-integration URL (not `https://google.com`).
@@ -300,7 +300,7 @@ Then start polling. Do not paste the token into tickets or commits.
 | User-visible (RU) | Typical cause |
 | --- | --- |
 | Сомелье сейчас запускается… | Cloud Run cold start |
-| Сейчас упёрлись в лимит бесплатного Gemini… | AI Studio quota (about 5 req/min, ~20/day on flash) |
+| Сейчас упёрлись в лимит бесплатного Gemini… | AI Studio quota (flash-lite is higher RPD than flash; still per project) |
 | Запрос слишком долгий… | `/run` timeout (120s) |
 | Сомелье временно недоступен… | Generic HTTP/agent failure |
 
@@ -451,7 +451,7 @@ A2A: the FastAPI app exposes A2A routes. Inspector: [A2A Inspector](https://gith
 | Dry-run says CREATE Cloud SQL | Old script; current cheap path must say in-memory / will not create |
 | tea-agent crash loop, “persistent ADK session backend” | Missing `TEA_ALLOW_EPHEMERAL_SESSIONS` and no Cloud SQL / engine id |
 | Telegram conflict / getUpdates | Webhook + polling together; see §6 |
-| Empty or quota replies | AI Studio daily/minute limits; wait or set `TEA_AGENT_MODEL` |
+| Empty or quota replies | AI Studio daily/minute limits; wait, or set `TEA_AGENT_MODEL=gemini-3.6-flash` on a paid tier |
 | First Telegram message hangs | Cold start; wait 30s |
 | Bot works locally, Cloud Run outdated | Need `--execute` after git changes (including `data/*.json`) |
 | Invented tasting notes | Tools-only rule; check slug resolve + `get_tea_card` |

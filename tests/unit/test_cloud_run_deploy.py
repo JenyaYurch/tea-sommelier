@@ -61,7 +61,8 @@ def test_two_stage_telegram_uses_placeholder_then_real_url() -> None:
     assert "google.com" not in env2
 
 
-def test_agent_deploy_uses_secret_manager_not_plaintext_key() -> None:
+def test_agent_deploy_uses_secret_manager_not_plaintext_key(monkeypatch) -> None:
+    monkeypatch.delenv("TEA_AGENT_MODEL", raising=False)
     args = agent_deploy_args(project="demo-proj")
     joined = " ".join(args)
     assert AGENT_SERVICE in args
@@ -75,7 +76,16 @@ def test_agent_deploy_uses_secret_manager_not_plaintext_key() -> None:
     assert "--set-cloudsql-instances=" not in joined
     assert "--clear-cloudsql-instances" in args
     assert "TEA_ALLOW_EPHEMERAL_SESSIONS=true" in joined
+    assert "TEA_AGENT_MODEL=gemini-3.1-flash-lite" in joined
     assert "SESSION_DB_PASSWORD" not in joined
+
+
+def test_agent_deploy_honors_tea_agent_model_override(monkeypatch) -> None:
+    monkeypatch.setenv("TEA_AGENT_MODEL", "gemini-3.6-flash")
+    args = agent_deploy_args(project="demo-proj")
+    env = next(item for item in args if item.startswith("--set-env-vars="))
+    assert "TEA_AGENT_MODEL=gemini-3.6-flash" in env
+    assert "TEA_AGENT_MODEL=gemini-3.1-flash-lite" not in env
 
 
 def test_agent_deploy_passes_memory_bank_engine_when_set() -> None:

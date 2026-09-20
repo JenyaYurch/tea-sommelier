@@ -23,9 +23,9 @@ agents-cli eval grade
 - `eval generate` needs any non-empty `GOOGLE_CLOUD_PROJECT` (the Vertex eval SDK
   builds a BigQuery client at startup; a placeholder works, no calls are made):
   ` $env:GOOGLE_CLOUD_PROJECT='teabot-local-eval'; agents-cli eval generate ... `
-- Free tier for `gemini-3.6-flash` is ~5 req/min and ~20 req/day. Run large
-  datasets as single-case slices (see `.tmp_eval/case_*.json`) with ~60 s pauses,
-  then merge with `scripts/merge_traces.py`.
+- Free tier for `gemini-3.1-flash-lite` is higher RPD than `gemini-3.6-flash`
+  (~20/day). Still slice large datasets (see `.tmp_eval/case_*.json`) with
+  pauses, then merge with `scripts/merge_traces.py`.
 - The judge (`tests/eval/response_quality.py`) runs on `gemini-3.5-flash` with a
   `gemini-3.1-flash-lite` fallback so it doesn't share the agent's daily quota.
 
