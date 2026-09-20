@@ -7,6 +7,8 @@ because SERVICE_URL is unknown until the first revision exists
 
 from __future__ import annotations
 
+import os
+
 from tea_agent.app_utils.session_uri import (
     EPHEMERAL_SESSIONS_ENV,
     normalize_cloud_sql_instance,
@@ -17,6 +19,7 @@ CLOUD_RUN_REGION = "europe-central2"
 AGENT_SERVICE = "tea-agent"
 TELEGRAM_SERVICE = "telegram-integration"
 ADK_APP_NAME = "tea_agent"
+DEFAULT_AGENT_MODEL = "gemini-3.1-flash-lite"
 PLACEHOLDER_SERVICE_URL = "https://google.com"
 TELEGRAM_COMMAND = "uv"
 TELEGRAM_ARGS = "run,python,-m,telegram_integration"
@@ -55,10 +58,13 @@ def agent_env_vars(
     session_db_user: str | None = None,
     session_db_name: str | None = None,
 ) -> str:
+    model = (os.environ.get("TEA_AGENT_MODEL") or DEFAULT_AGENT_MODEL).strip()
+    model = model or DEFAULT_AGENT_MODEL
     parts = [
         "GOOGLE_GENAI_USE_VERTEXAI=false",
         f"GOOGLE_CLOUD_PROJECT={project}",
         f"GOOGLE_CLOUD_LOCATION={location}",
+        f"TEA_AGENT_MODEL={model}",
     ]
     engine_id = (agent_engine_id or "").strip()
     if engine_id:

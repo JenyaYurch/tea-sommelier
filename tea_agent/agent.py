@@ -36,7 +36,7 @@ from tea_agent.tools import (
     similar_teas,
 )
 
-MODEL = os.environ.get("TEA_AGENT_MODEL", "gemini-3.6-flash")
+MODEL = os.environ.get("TEA_AGENT_MODEL", "gemini-3.1-flash-lite")
 
 INSTRUCTION = """
 Ты — сомелье по китайскому чаю витрины: зелёный, белый, жёлтый, красный (black tea),

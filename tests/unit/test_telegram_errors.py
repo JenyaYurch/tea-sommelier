@@ -75,7 +75,7 @@ def test_classify_exception_to_code(err: BaseException, code: str) -> None:
         (TEA_COLD_START, "запускается"),
         (TEA_TIMEOUT_RUN, "слишком долгий"),
         (TEA_UNAVAILABLE, "временно недоступен"),
-        (TEA_QUOTA, "5 запросов в минуту"),
+        (TEA_QUOTA, "лимит бесплатного Gemini"),
         (TEA_AGENT_ERROR, "Сбой на стороне сомелье"),
         (TEA_SESSION_FAILED, "Не удалось открыть сессию"),
         (TEA_EMPTY_REPLY, "Не получилось собрать ответ"),
@@ -170,7 +170,7 @@ async def test_run_500_session_quota_sends_quota_text(
     assert text == QUOTA_TEXT
     assert "error_code=TEA_QUOTA" in logs
     assert "Сбой на стороне сомелье" not in text
-    assert "20" in text
+    assert "лимит бесплатного Gemini" in text
 
 
 @pytest.mark.asyncio
