@@ -161,6 +161,19 @@ async def test_quota_keeps_existing_text(caplog: pytest.LogCaptureFixture) -> No
 
 
 @pytest.mark.asyncio
+async def test_run_500_session_quota_sends_quota_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    text, logs = await _reply(
+        AdkQuotaError("ADK quota exhausted (500)", status_code=429), caplog
+    )
+    assert text == QUOTA_TEXT
+    assert "error_code=TEA_QUOTA" in logs
+    assert "Сбой на стороне сомелье" not in text
+    assert "лимит бесплатного Gemini" in text
+
+
+@pytest.mark.asyncio
 async def test_run_500_sends_agent_error(caplog: pytest.LogCaptureFixture) -> None:
     text, logs = await _reply(
         AdkClientError("ADK /run failed", error_code=TEA_AGENT_ERROR, status_code=500),
