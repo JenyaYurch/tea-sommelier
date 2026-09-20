@@ -173,6 +173,19 @@ What `--execute` does:
 
 During step 4 the webhook target is briefly `https://google.com`. Do not `/start` until the script prints **Deploy finished**.
 
+### Switch model without a rebuild
+
+Live `tea-agent` already reads `TEA_AGENT_MODEL` at process start. To move production to lite without `--execute`:
+
+```bash
+gcloud run services update tea-agent \
+  --project=gen-lang-client-0393777014 \
+  --region=europe-central2 \
+  --update-env-vars=TEA_AGENT_MODEL=gemini-3.1-flash-lite
+```
+
+In-memory sessions reset on the new revision. Then send a short Telegram message (not a mixed cart) to confirm. A later `--execute` pins the same model because deploy always sets `TEA_AGENT_MODEL`.
+
 Skip the persistence probe even when SQL is attached:
 
 ```bash
@@ -432,6 +445,7 @@ Then set `GOOGLE_CLOUD_AGENT_ENGINE_ID` (and usually `GOOGLE_CLOUD_AGENT_ENGINE_
 | Upsert secrets | `uv run python scripts/setup_secret_manager.py` |
 | Deploy dry-run | `uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014` |
 | Deploy | same + `--execute` |
+| Switch live model (no rebuild) | `gcloud run services update tea-agent --project=gen-lang-client-0393777014 --region=europe-central2 --update-env-vars=TEA_AGENT_MODEL=gemini-3.1-flash-lite` |
 | Service list | `gcloud run services list --project=gen-lang-client-0393777014 --region=europe-central2` |
 | Logs | `gcloud run services logs read tea-agent --project=gen-lang-client-0393777014 --region=europe-central2 --limit=80` |
 | Rebuild slug index | `uv run python scripts/build_tea_slugs.py` |
