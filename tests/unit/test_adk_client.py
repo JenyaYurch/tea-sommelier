@@ -19,6 +19,8 @@ from telegram_integration.adk_client import (
     AdkUnavailableError,
     extract_reply_text,
     normalize_adk_base_url,
+    payload_looks_like_quota,
+    session_has_quota_error,
 )
 
 
@@ -198,6 +200,69 @@ async def test_run_500_is_agent_error() -> None:
         await _client(handler).ask("tg-1", "tg-sess-1", "hi")
     assert exc.value.error_code == TEA_AGENT_ERROR
     assert exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_run_500_with_resource_exhausted_body_is_quota() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": "s"})
+        return httpx.Response(500, text="_ResourceExhaustedError")
+
+    with pytest.raises(AdkQuotaError) as exc:
+        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+    assert exc.value.error_code == TEA_QUOTA
+
+
+@pytest.mark.asyncio
+async def test_run_500_internal_error_reads_session_quota_event() -> None:
+    """Prod: /run returns generic 500; Gemini 429 is only on the session event."""
+    gets = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal gets
+        if request.method == "GET":
+            gets += 1
+            if gets == 1:
+                return httpx.Response(200, json={"id": "s", "events": []})
+            return httpx.Response(
+                200,
+                json={
+                    "id": "s",
+                    "events": [
+                        {
+                            "author": "tea_sommelier",
+                            "errorCode": "_ResourceExhaustedError",
+                            "errorMessage": (
+                                "429 RESOURCE_EXHAUSTED. Quota exceeded for metric: "
+                                "generate_content_free_tier_requests, limit: 20"
+                            ),
+                        }
+                    ],
+                },
+            )
+        return httpx.Response(500, text="Internal Server Error")
+
+    with pytest.raises(AdkQuotaError) as exc:
+        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+    assert exc.value.error_code == TEA_QUOTA
+    assert exc.value.status_code == 429
+    assert gets == 2
+
+
+def test_payload_and_session_quota_helpers() -> None:
+    assert payload_looks_like_quota("_ResourceExhaustedError")
+    assert payload_looks_like_quota("429 RESOURCE_EXHAUSTED")
+    assert not payload_looks_like_quota("Internal Server Error")
+    assert session_has_quota_error(
+        {
+            "events": [
+                {"author": "user", "content": {"parts": [{"text": "hi"}]}},
+                {"errorCode": "_ResourceExhaustedError"},
+            ]
+        }
+    )
+    assert not session_has_quota_error({"id": "s", "events": []})
 
 
 @pytest.mark.asyncio

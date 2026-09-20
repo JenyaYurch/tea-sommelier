@@ -97,6 +97,31 @@ def extract_reply_text(events: Any) -> str:
     return "\n\n".join(pieces).strip()
 
 
+def payload_looks_like_quota(*parts: object) -> bool:
+    """True for Gemini 429 / ADK ``_ResourceExhaustedError`` in any string blob."""
+    blob = " ".join(str(part) for part in parts if part)
+    compact = blob.upper().replace("_", "").replace("-", "").replace(" ", "")
+    return "RESOURCEEXHAUSTED" in compact or "QUOTAEXCEEDED" in compact
+
+
+def session_has_quota_error(payload: Any) -> bool:
+    """True when the latest ADK session events are Gemini free-tier 429s."""
+    if not isinstance(payload, dict):
+        return False
+    events = payload.get("events")
+    if not isinstance(events, list):
+        return False
+    for event in reversed(events[-8:]):
+        if not isinstance(event, dict):
+            continue
+        if payload_looks_like_quota(
+            event.get("errorCode") or event.get("error_code"),
+            event.get("errorMessage") or event.get("error_message"),
+        ):
+            return True
+    return False
+
+
 def _looks_like_quota(err: BaseException | None) -> bool:
     seen: set[int] = set()
     while err is not None and id(err) not in seen:
@@ -104,7 +129,7 @@ def _looks_like_quota(err: BaseException | None) -> bool:
         if isinstance(err, AdkQuotaError):
             return True
         status = getattr(err, "status_code", None) or getattr(err, "code", None)
-        if status == 429 or "RESOURCE_EXHAUSTED" in str(err):
+        if status == 429 or payload_looks_like_quota(err):
             return True
         err = err.__cause__ or err.__context__
     return False
@@ -123,7 +148,7 @@ def classify_adk_error(err: BaseException) -> str:
 
 def _raise_for_status(status_code: int, body: str, *, scope: str) -> None:
     snippet = (body or "")[:200]
-    if status_code == 429 or "RESOURCE_EXHAUSTED" in (body or ""):
+    if status_code == 429 or payload_looks_like_quota(body):
         raise AdkQuotaError(
             f"ADK quota exhausted ({status_code})",
             status_code=status_code,
@@ -200,6 +225,41 @@ class AdkHttpClient:
         if created.status_code not in {200, 201}:
             _raise_for_status(created.status_code, created.text, scope="session")
 
+    async def _raise_for_run_failure(
+        self,
+        client: httpx.AsyncClient,
+        user_id: str,
+        session_id: str,
+        response: httpx.Response,
+    ) -> None:
+        """Map /run failures. Gemini quota often arrives as HTTP 500 + session 429."""
+        if (
+            response.status_code not in _UNAVAILABLE_STATUS
+            and response.status_code != 429
+            and not payload_looks_like_quota(response.text)
+        ):
+            try:
+                session = await _await_adk(
+                    client.get(
+                        self._session_url(user_id, session_id),
+                        timeout=SESSION_TIMEOUT_SEC,
+                    ),
+                    timeout_code=TEA_COLD_START,
+                )
+            except (AdkTimeoutError, AdkUnavailableError):
+                session = None
+            if session is not None and session.status_code == 200:
+                try:
+                    payload = session.json()
+                except ValueError:
+                    payload = None
+                if session_has_quota_error(payload):
+                    raise AdkQuotaError(
+                        f"ADK quota exhausted ({response.status_code})",
+                        status_code=429,
+                    )
+        _raise_for_status(response.status_code, response.text, scope="run")
+
     async def ask(self, user_id: str, session_id: str, text: str) -> str:
         async with httpx.AsyncClient(transport=self._transport) as client:
             await self.ensure_session(client, user_id, session_id)
@@ -219,6 +279,8 @@ class AdkHttpClient:
                 ),
                 timeout_code=TEA_TIMEOUT_RUN,
             )
-        if response.status_code != 200:
-            _raise_for_status(response.status_code, response.text, scope="run")
-        return extract_reply_text(response.json())
+            if response.status_code != 200:
+                await self._raise_for_run_failure(
+                    client, user_id, session_id, response
+                )
+            return extract_reply_text(response.json())
