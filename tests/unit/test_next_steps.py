@@ -59,7 +59,7 @@ def test_format_block_has_actions_and_catalog_buy_links() -> None:
     for label in ACTION_LABELS:
         assert f"[{label}]" in block
     assert LONGJING_URL in block
-    assert "Купить: Си Ху Лун Цзин" in block
+    assert "Купить: Лунцзин" in block
     assert FAKE_URL not in block
     assert "[купить]" not in block
 
@@ -79,7 +79,7 @@ def test_parse_next_steps_roundtrip() -> None:
     buys = [step for step in steps if step.kind == "buy"]
     assert set(ACTION_LABELS) <= actions
     assert buys[0].url == LONGJING_URL
-    assert "Лун Цзин" in buys[0].label
+    assert "Лунцзин" in buys[0].label
 
 
 def test_ensure_next_steps_appends_and_rewrites_invented_link() -> None:
