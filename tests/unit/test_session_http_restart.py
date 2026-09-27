@@ -196,12 +196,17 @@ def test_cloud_run_entrypoint_refuses_sqlite(sqlite_uri: str, server_port: int) 
         {"K_SERVICE": "tea-agent", "SESSION_SERVICE_URI": sqlite_uri},
     )
     try:
-        proc.wait(timeout=20)
+        # Drain both pipes while waiting. wait() leaves them unread, and on
+        # Windows a full stderr pipe blocks uvicorn before it can exit.
+        stdout, stderr = proc.communicate(timeout=20)
     except subprocess.TimeoutExpired:
-        stderr = _stop(proc)
-        raise AssertionError(f"Cloud Run sqlite backend should fail fast: {stderr[-1500:]}")
-    stderr = proc.stderr.read() if proc.stderr else ""
-    combined = stderr + (proc.stdout.read() if proc.stdout else "")
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        combined = f"{stdout or ''}{stderr or ''}"
+        raise AssertionError(
+            f"Cloud Run sqlite backend should fail fast: {combined[-1500:]}"
+        )
+    combined = f"{stdout or ''}{stderr or ''}"
     assert proc.returncode != 0
     assert "sqlite is ephemeral" in combined or "persistent ADK session backend" in combined
 

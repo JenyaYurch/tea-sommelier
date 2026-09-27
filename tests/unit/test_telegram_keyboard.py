@@ -22,6 +22,8 @@ LONGJING_URL = "https://www.teashop.by/product/longjing-1/"
 LONGJING_SKU2 = "https://www.teashop.by/product/xihu-longjing/"
 BILUOCHUN_URL = "https://www.teashop.by/product/duntin-bi-lo-chun/"
 ANJI_URL = "https://www.teashop.by/product/anczi-bajcha/"
+GUNTIN_URL = "https://www.teashop.by/product/pujer-guntin/"
+LAO_CHA_TOU_URL = "https://www.teashop.by/product/lao-cha-tou-tri-obezjany/"
 FAKE_URL = "https://www.teashop.by/product/totally-invented-tea/"
 
 
@@ -130,6 +132,35 @@ def test_named_recs_without_buy_urls_still_get_catalog_buttons() -> None:
     assert "Лунцзин" in labels[0]
     assert "Би Ло Чунь" in labels[1]
     assert "Аньцзи" in labels[2]
+
+
+def test_shared_slug_shu_recommendations_get_separate_matching_buttons() -> None:
+    recs = (
+        "1. Шу пуэр «Гун Тин» — мягкий и древесный.\n"
+        "2. Шу пуэр «Лао Ча Тоу» — плотный и сладкий."
+    )
+    block = format_next_steps_block(
+        [
+            {
+                "product_name": "Шу пуэр Лао Ча Тоу «Чайные обезьяны»",
+                "product_url": LAO_CHA_TOU_URL,
+                "matched_slug": "7572-shu-bing",
+            },
+            {
+                "product_name": "Шу пуэр Гун Тин",
+                "product_url": GUNTIN_URL,
+                "matched_slug": "7572-shu-bing",
+            },
+        ]
+    )
+
+    _, markup = prepare_telegram_reply(f"{recs}\n\n{block}")
+
+    assert markup is not None
+    buys = [button for button in _buttons(markup) if "url" in button]
+    assert [button["url"] for button in buys] == [GUNTIN_URL, LAO_CHA_TOU_URL]
+    assert "Гунтин" in buys[0]["text"]
+    assert "Лао Ча Тоу" in buys[1]["text"]
 
 
 def test_invented_buy_url_without_named_recs_is_not_a_url_button() -> None:

@@ -29,6 +29,8 @@ LONGJING_SKU3 = "https://www.teashop.by/product/longjingcha/"
 BILUOCHUN_URL = "https://www.teashop.by/product/duntin-bi-lo-chun/"
 ANJI_URL = "https://www.teashop.by/product/anczi-bajcha/"
 BAI_MAO_URL = "https://www.teashop.by/product/baj-mao-xou-snezhnaya-obezyana/"
+GUNTIN_URL = "https://www.teashop.by/product/pujer-guntin/"
+LAO_CHA_TOU_URL = "https://www.teashop.by/product/lao-cha-tou-tri-obezjany/"
 FAKE_URL = "https://www.teashop.by/product/totally-invented-tea/"
 
 
@@ -57,7 +59,7 @@ def test_format_block_has_actions_and_catalog_buy_links() -> None:
     for label in ACTION_LABELS:
         assert f"[{label}]" in block
     assert LONGJING_URL in block
-    assert "Купить: Си Ху Лун Цзин" in block
+    assert "Купить: Лунцзин" in block
     assert FAKE_URL not in block
     assert "[купить]" not in block
 
@@ -77,7 +79,7 @@ def test_parse_next_steps_roundtrip() -> None:
     buys = [step for step in steps if step.kind == "buy"]
     assert set(ACTION_LABELS) <= actions
     assert buys[0].url == LONGJING_URL
-    assert "Лун Цзин" in buys[0].label
+    assert "Лунцзин" in buys[0].label
 
 
 def test_ensure_next_steps_appends_and_rewrites_invented_link() -> None:
@@ -150,7 +152,7 @@ def test_buy_products_match_named_teas_not_neighbor_skus() -> None:
     assert [step.url for step in buys] == [LONGJING_URL, BILUOCHUN_URL, ANJI_URL]
 
 
-def test_collect_shop_hits_keeps_one_sku_per_slug() -> None:
+def test_collect_shop_hits_keeps_distinct_skus_with_same_slug() -> None:
     state: dict = {}
     tool = SimpleNamespace(name="find_in_shop")
     ctx = SimpleNamespace(state=state)
@@ -175,8 +177,53 @@ def test_collect_shop_hits_keeps_one_sku_per_slug() -> None:
         },
     )
     hits = state[SHOP_HITS_KEY]
-    assert len(hits) == 1
-    assert hits[0]["product_url"] == LONGJING_URL
+    assert [item["product_url"] for item in hits] == [LONGJING_URL, LONGJING_SKU2]
+
+
+def test_shu_products_with_shared_slug_keep_sku_data_atomic() -> None:
+    products = [
+        {
+            "product_name": "Шу пуэр Лао Ча Тоу «Чайные обезьяны»",
+            "product_url": LAO_CHA_TOU_URL,
+            "matched_slug": "7572-shu-bing",
+            "price_from_byn": 11.0,
+            "weight_g": 25,
+        },
+        {
+            "product_name": "Шу пуэр Гун Тин",
+            "product_url": GUNTIN_URL,
+            "matched_slug": "7572-shu-bing",
+            "price_from_byn": 10.1,
+            "weight_g": 100,
+        },
+    ]
+    text = (
+        "1. Шу пуэр «Гун Тин» — мягкий и древесный.\n"
+        "2. Шу пуэр «Лао Ча Тоу» — плотный и сладкий."
+    )
+
+    selected = products_for_reply(text, products)
+
+    assert [item["product_url"] for item in selected] == [
+        GUNTIN_URL,
+        LAO_CHA_TOU_URL,
+    ]
+    assert [(item["price_from_byn"], item["weight_g"]) for item in selected] == [
+        (10.1, 100),
+        (11.0, 25),
+    ]
+    assert "Гунтин" in selected[0]["product_name"]
+    assert "Лао Ча Тоу" in selected[1]["product_name"]
+
+    buys = [
+        step
+        for step in parse_next_steps(ensure_next_steps(text, products))
+        if step.kind == "buy"
+    ]
+    assert [(step.label, step.url) for step in buys] == [
+        (selected[0]["product_name"], GUNTIN_URL),
+        (selected[1]["product_name"], LAO_CHA_TOU_URL),
+    ]
 
 
 def test_should_attach_on_three_recs_even_without_shop() -> None:
