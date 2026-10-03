@@ -9,6 +9,7 @@ The agent (TEA-7) ends recommendation replies with:
 This module strips that block from the visible text and attaches real buttons.
 Action taps send callback_data into the same ADK session as the user's chat.
 «Купить» is a URL button that opens the teashop.by catalog link — never an invented URL.
+👍 / 👎 use a separate ``tea:f:`` callback so they record feedback and do not call the model.
 """
 
 from __future__ import annotations
@@ -29,6 +30,12 @@ from telegram_integration.split import TELEGRAM_MAX_MESSAGE_LENGTH, split_telegr
 
 CALLBACK_PREFIX = "tea:a:"
 CALLBACK_PATTERN = re.compile(rf"^{re.escape(CALLBACK_PREFIX)}")
+FEEDBACK_CALLBACK_PREFIX = "tea:f:"
+FEEDBACK_CALLBACK_PATTERN = re.compile(rf"^{re.escape(FEEDBACK_CALLBACK_PREFIX)}")
+FEEDBACK_UP = "up"
+FEEDBACK_DOWN = "down"
+FEEDBACK_SKIP = "skip"
+_FEEDBACK_KINDS = frozenset({FEEDBACK_UP, FEEDBACK_DOWN, FEEDBACK_SKIP})
 _ALLOWED_CALLBACKS = frozenset(ACTION_LABELS) | {"купить"}
 _BUTTON_TEXT_LIMIT = 64
 _MAX_BUY_BUTTONS = 3
@@ -62,6 +69,47 @@ def parse_action_callback(data: str | None) -> str | None:
     if label in _ALLOWED_CALLBACKS:
         return label
     return None
+
+
+def feedback_callback_data(kind: str) -> str:
+    return f"{FEEDBACK_CALLBACK_PREFIX}{kind}"
+
+
+def parse_feedback_callback(data: str | None) -> str | None:
+    """Return ``up``, ``down``, or ``skip``. Action callbacks are not feedback."""
+    if not data or not data.startswith(FEEDBACK_CALLBACK_PREFIX):
+        return None
+    kind = data[len(FEEDBACK_CALLBACK_PREFIX) :]
+    if kind in _FEEDBACK_KINDS:
+        return kind
+    return None
+
+
+def feedback_button_row() -> list[InlineKeyboardButton]:
+    """👍 / 👎 row. Two buttons, ASCII callback_data, under the 64-byte cap."""
+    return [
+        InlineKeyboardButton(
+            text="👍",
+            callback_data=feedback_callback_data(FEEDBACK_UP),
+        ),
+        InlineKeyboardButton(
+            text="👎",
+            callback_data=feedback_callback_data(FEEDBACK_DOWN),
+        ),
+    ]
+
+
+def build_feedback_skip_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    text="Пропустить",
+                    callback_data=feedback_callback_data(FEEDBACK_SKIP),
+                )
+            ]
+        ]
+    )
 
 
 def build_next_steps_keyboard(
@@ -104,6 +152,7 @@ def build_next_steps_keyboard(
                 )
             ]
         )
+    rows.append(feedback_button_row())
     return InlineKeyboardMarkup(rows)
 
 

@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import contextlib
-import logging
 import os
 from collections.abc import AsyncIterator
 
@@ -26,6 +25,7 @@ from google.adk.runners import Runner
 from tea_agent.app_utils import services
 from tea_agent.app_utils.a2a import attach_a2a_routes
 from tea_agent.app_utils.agent_auth import AgentAuthMiddleware, dev_ui_enabled
+from tea_agent.app_utils.feedback_log import log_feedback
 from tea_agent.app_utils.typing import Feedback
 
 load_dotenv()
@@ -34,7 +34,6 @@ allow_origins = (
 )
 
 AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_log = logging.getLogger(__name__)
 
 
 def _otel_to_cloud() -> bool:
@@ -42,17 +41,6 @@ def _otel_to_cloud() -> bool:
     if raw is None:
         return True
     return raw.strip().lower() not in {"0", "false", "no"}
-
-
-def _log_feedback(payload: dict) -> None:
-    try:
-        from google.cloud import logging as google_cloud_logging
-
-        google_cloud_logging.Client().logger(__name__).log_struct(
-            payload, severity="INFO"
-        )
-    except Exception:
-        _log.info("feedback %s", payload)
 
 
 @contextlib.asynccontextmanager
@@ -105,7 +93,7 @@ def collect_feedback(feedback: Feedback) -> dict[str, str]:
     Returns:
         Success message
     """
-    _log_feedback(feedback.model_dump())
+    log_feedback(feedback.model_dump(mode="json"))
     return {"status": "success"}
 
 

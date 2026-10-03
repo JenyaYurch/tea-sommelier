@@ -15,6 +15,7 @@ from tea_agent.app_utils.agent_auth import request_headers
 DEFAULT_APP_NAME = "tea_agent"
 SESSION_TIMEOUT_SEC = 10.0
 RUN_TIMEOUT_SEC = 120.0
+FEEDBACK_TIMEOUT_SEC = 10.0
 
 TEA_COLD_START = "TEA_COLD_START"
 TEA_TIMEOUT_RUN = "TEA_TIMEOUT_RUN"
@@ -292,3 +293,24 @@ class AdkHttpClient:
                     client, user_id, session_id, response
                 )
             return extract_reply_text(response.json())
+
+    async def submit_feedback(self, payload: dict) -> None:
+        """POST /feedback. Does not open a session and does not call the model."""
+        async with httpx.AsyncClient(
+            transport=self._transport,
+            headers=request_headers(self.auth_secret),
+        ) as client:
+            response = await _await_adk(
+                client.post(
+                    f"{self.base_url}/feedback",
+                    json=payload,
+                    timeout=FEEDBACK_TIMEOUT_SEC,
+                ),
+                timeout_code=TEA_UNAVAILABLE,
+            )
+            if response.status_code != 200:
+                raise AdkClientError(
+                    f"ADK /feedback failed: {response.status_code}",
+                    error_code=TEA_AGENT_ERROR,
+                    status_code=response.status_code,
+                )

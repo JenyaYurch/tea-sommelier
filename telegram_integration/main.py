@@ -50,9 +50,18 @@ from telegram_integration.deploy_spec import (
     is_webhook_mode,
     normalize_service_url,
 )
+from telegram_integration.feedback import (
+    clear_pending_feedback,
+    feedback_cmd,
+    help_cmd,
+    maybe_capture_feedback_text,
+    on_feedback_callback,
+    publish_bot_commands,
+)
 from telegram_integration.format import markdown_to_telegram_html
 from telegram_integration.keyboard import (
     CALLBACK_PATTERN,
+    FEEDBACK_CALLBACK_PATTERN,
     parse_action_callback,
     prepare_telegram_reply,
     telegram_session_id,
@@ -71,7 +80,8 @@ START_TEXT = (
     "Привет, я сомелье по китайскому чаю: зелёный, белый, жёлтый, "
     "красный, шен/шу пуэр и GABA.\n\n"
     "Напишите вкус (мягкий, без горечи, утро), сорт — Лунцзин, Бай Му Дань, "
-    "Дянь Хун, шен пуэр — или пришлите список из заказа."
+    "Дянь Хун, шен пуэр — или пришлите список из заказа.\n\n"
+    "Памятка — /help, отзыв — /feedback."
 )
 UNAVAILABLE_TEXT = (
     "Сомелье временно недоступен. Попробуйте ещё раз через минуту."
@@ -286,15 +296,27 @@ def _start_code(context: ContextTypes.DEFAULT_TYPE) -> str:
     return str(args[0]).strip()
 
 
+def _blocked_reply(gate: AccessGate, user_id: int) -> str | None:
+    """Closed-beta refusal, or None when this user may continue.
+
+    Does not spend a rate-limit token.
+    """
+    if gate.is_allowed(user_id):
+        return None
+    logger.info("blocked non-allowlisted telegram user %s", user_id)
+    return gate.denied_text()
+
+
 def _turn_block_text(gate: AccessGate, user_id: int) -> str | None:
     """Refusal to send instead of calling tea-agent, or None when the turn is allowed.
 
     Rate-limit tokens are consumed only after the allowlist check, so a
     stranger cannot fill the counter, and a blocked user never reaches the agent.
+    Feedback taps and /feedback do not use this helper.
     """
-    if not gate.is_allowed(user_id):
-        logger.info("blocked non-allowlisted telegram user %s", user_id)
-        return gate.denied_text()
+    blocked = _blocked_reply(gate, user_id)
+    if blocked is not None:
+        return blocked
     decision = gate.consume_rate(user_id)
     if not decision.allowed:
         logger.info("rate limited telegram user %s window=%s", user_id, decision.reason)
@@ -307,6 +329,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not message or not user:
         return
+    clear_pending_feedback(context.application.bot_data, user.id)
     gate = get_access_gate(context.application.bot_data)
     code = _start_code(context)
     # Compare the invite code only on /start, and only spend a rate-limit
@@ -346,10 +369,19 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not message or not message.text or not user:
         return
-    gate = get_access_gate(context.application.bot_data)
-    refusal = _turn_block_text(gate, user.id)
-    if refusal is not None:
-        await message.reply_text(refusal)
+    bot_data = context.application.bot_data
+    gate = get_access_gate(bot_data)
+    blocked = _blocked_reply(gate, user.id)
+    if blocked is not None:
+        clear_pending_feedback(bot_data, user.id)
+        await message.reply_text(blocked)
+        return
+    if await maybe_capture_feedback_text(message, user.id, bot_data):
+        return
+    decision = gate.consume_rate(user.id)
+    if not decision.allowed:
+        logger.info("rate limited telegram user %s window=%s", user.id, decision.reason)
+        await message.reply_text(decision.user_text)
         return
     await _run_agent_and_reply(
         target=message,
@@ -370,6 +402,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not label or message is None:
         await query.answer()
         return
+    clear_pending_feedback(context.application.bot_data, user.id)
     gate = get_access_gate(context.application.bot_data)
     refusal = _turn_block_text(gate, user.id)
     if refusal is not None:
@@ -388,11 +421,13 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def post_init_polling(application: Application) -> None:
     await application.bot.delete_webhook(drop_pending_updates=True)
+    await publish_bot_commands(application.bot)
     me = await application.bot.get_me()
     logger.info("Polling as @%s (live while this process runs)", me.username)
 
 
 async def post_init_webhook(application: Application) -> None:
+    await publish_bot_commands(application.bot)
     me = await application.bot.get_me()
     logger.info("Webhook as @%s (url_path is the bot token, not logged)", me.username)
 
@@ -435,6 +470,20 @@ def _attach_backend(application: Application, *, webhook: bool) -> None:
     logger.info("ADK backend: in-process Runner")
 
 
+def _register_handlers(application: Application) -> None:
+    application.add_handler(CommandHandler("start", start_cmd))
+    application.add_handler(CommandHandler("help", help_cmd))
+    application.add_handler(CommandHandler("feedback", feedback_cmd))
+    application.add_handler(
+        CallbackQueryHandler(on_feedback_callback, pattern=FEEDBACK_CALLBACK_PATTERN)
+    )
+    application.add_handler(
+        CallbackQueryHandler(on_callback, pattern=CALLBACK_PATTERN)
+    )
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    application.add_error_handler(on_error)
+
+
 def main() -> None:
     _load_env()
     token = _require_token()
@@ -450,12 +499,7 @@ def main() -> None:
     )
     _attach_access(application, webhook=webhook)
     _attach_backend(application, webhook=webhook)
-    application.add_handler(CommandHandler("start", start_cmd))
-    application.add_handler(
-        CallbackQueryHandler(on_callback, pattern=CALLBACK_PATTERN)
-    )
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
-    application.add_error_handler(on_error)
+    _register_handlers(application)
     if webhook:
         listen_url = normalize_service_url(service_url or "")
         logger.info("Starting Telegram webhook on port %s", port)
