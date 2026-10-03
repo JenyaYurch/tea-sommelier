@@ -330,6 +330,8 @@ gcloud run services logs read telegram-integration --project=gen-lang-client-039
 
 Console: Cloud Run → service → Logs. Cloud Trace, Cloud Monitoring, and Cloud Logging are enabled on the agent image when `OTEL_TO_CLOUD` is not `false`.
 
+Beta feedback (👍 / 👎 and `/feedback`) is a structured Cloud Logging record on `tea-agent`, not the in-memory chat session. Query it with [§6.2](#62-in-chat-feedback).
+
 ### Cloud SQL / Memory Bank (should be empty on the cheap path)
 
 ```bash
@@ -405,7 +407,7 @@ This section is the owner runbook. Shipping the code does not by itself change t
 | `TELEGRAM_ACCESS_MODE=open` | Anyone, including on Cloud Run. Leave this unset for the beta |
 | Admin id | Always allowed when the gate is on, including when the id is missing from the allowlist. The same per-user rate limit applies |
 
-A refused user gets a short Russian closed-beta reply. Their text is not sent to `tea-agent`. The same check runs for inline-button presses.
+A refused user gets a short Russian closed-beta reply. Their text is not sent to `tea-agent`. The same allowlist check runs for inline-button presses, including 👍 / 👎. Rating a reply and `/feedback` do not call the model; see [In-chat feedback](#62-in-chat-feedback).
 
 ### Defaults
 
@@ -415,7 +417,7 @@ A refused user gets a short Russian closed-beta reply. Their text is not sent to
 | `TELEGRAM_RATE_LIMIT_PER_MINUTE` | `4` |
 | `TELEGRAM_RATE_LIMIT_PER_DAY` | `30` (resets at 00:00 UTC) |
 
-`0` on a rate-limit variable turns that bucket off. Any other non-number keeps the default. The minute window is a fixed unix minute (a user can send 4 just before the boundary and 4 just after). Text messages and inline buttons both count. `/start` by itself does not. A wrong invite code does, so guessing is capped.
+`0` on a rate-limit variable turns that bucket off. Any other non-number keeps the default. The minute window is a fixed unix minute (a user can send 4 just before the boundary and 4 just after). Text messages to the sommelier and next-step buttons (мягче, дешевле, купить, and the rest) both count. `/start` by itself does not. A wrong invite code does, so guessing is capped. 👍, 👎, `/help`, `/feedback`, and the follow-up message those ask for do not count.
 
 Five pilot testers at the daily cap are 150 agent calls. Before the 30–50 person beta, lower `TELEGRAM_RATE_LIMIT_PER_DAY` if the shared Gemini key is close to its project quota.
 
@@ -500,6 +502,95 @@ To keep that mount across the next full deploy, export `TELEGRAM_INVITE_CODE_SEC
 ```bash
 gcloud run services update telegram-integration --project=gen-lang-client-0393777014 --region=europe-central2 --update-env-vars=TELEGRAM_RATE_LIMIT_PER_MINUTE=4,TELEGRAM_RATE_LIMIT_PER_DAY=30
 ```
+
+---
+
+## 6.2 In-chat feedback
+
+Testers can rate a recommendation and send a note without spending a Gemini call. The allowlist from [§6.1](#61-closed-beta-allowlist-and-rate-limit) still applies. 👍, 👎, `/feedback`, the follow-up those ask for, and `/help` do not spend `TELEGRAM_RATE_LIMIT_PER_MINUTE` or `TELEGRAM_RATE_LIMIT_PER_DAY`. Next-step buttons still do.
+
+| Tester action | What they see | What is stored |
+| --- | --- | --- |
+| 👍 or 👎 under a recommendation, on the same keyboard as мягче / дешевле / купить | «Спасибо, записал.» or, after 👎, a one-line ask for a reason | `source=thumbs`, `rating=up` (`score=1`) or `rating=down` (`score=0`), plus `user_id`, `session_id`, `message_id`, and a short `reply_excerpt` of that Telegram message |
+| Next message after 👎 | «Спасибо, отзыв записан.» The message is not sent to the sommelier | Second line, `source=thumbs_reason`, same `message_id` and excerpt, `text` is the reason |
+| «Пропустить» after 👎 | «Хорошо. Дальше пишите сомелье как обычно.» | Nothing new. The 👎 line is already stored. The next message goes to the sommelier |
+| `/feedback текст` | «Спасибо, отзыв записан.» | `source=command`, `text` is the note, no score |
+| `/feedback` with no text | Asks for the next message. That message is stored the same way and is not sent to the sommelier | `source=command` |
+| `/help` | Short Russian памятка (how to ask, what the buttons do, how to send a note). Allowed users only; others get the closed-beta refusal | Nothing |
+
+A 👎 is logged immediately, so it is kept even if the tester never explains. The "waiting for a reason" flag is process memory on `telegram-integration`. A new revision or restart drops the flag; the 👎 line in Cloud Logging stays. If they reply after that restart, the text goes to the sommelier.
+
+`/help` is the beta FAQ. The Notion card asked for a short tester text and did not include a longer FAQ, so the in-chat памятка is the whole FAQ for this pilot.
+
+The buttons are only on replies that already have the next-step keyboard. A plain question, an error, or `/start` has no 👍 / 👎. The row is two buttons (`tea:f:up`, `tea:f:down`). Callback data stays under Telegram's 64-byte cap, and the extra row stays inside the 100-button cap. Tapping one does not call `POST /run`.
+
+### Where it is stored
+
+Sessions are in memory, so feedback is not written to the ADK session. `telegram-integration` POSTs the JSON to tea-agent `POST /feedback` with the same `X-Tea-Agent-Token` header as `/run` (secret `TEA_AGENT_AUTH_SECRET`). tea-agent writes one structured Cloud Logging record (`jsonPayload.log_type` = `feedback`, log name `tea-sommelier.feedback`). That record survives a restart and a new revision.
+
+Fields you will filter on:
+
+| Field | Meaning |
+| --- | --- |
+| `log_type` | Always `feedback` |
+| `user_id` | `tg-<telegram id>` |
+| `session_id` | `tg-sess-<telegram id>` (same ids the bot uses for `/run`) |
+| `source` | `thumbs`, `thumbs_reason`, or `command` |
+| `rating` | `up`, `down`, or empty for a free-text note |
+| `score` | `1`, `0`, or absent for a free-text note |
+| `message_id` | Telegram message id of the recommendation that was rated |
+| `reply_excerpt` | Plain text of that message, one line, clipped |
+| `text` | The tester's note, if any |
+
+If tea-agent rejects the POST (401, timeout, 5xx), `telegram-integration` writes the same JSON itself so the tap is not dropped. Local polling without `ADK_SERVER_URL` only has that local write: a structured log when Google credentials exist, otherwise one stdout line that starts with `feedback` and contains the JSON.
+
+### Read it after the pilot
+
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="tea-agent" AND jsonPayload.log_type="feedback"' \
+  --project=gen-lang-client-0393777014 \
+  --freshness=30d \
+  --limit=200 \
+  --format='table(timestamp, jsonPayload.user_id, jsonPayload.rating, jsonPayload.source, jsonPayload.text, jsonPayload.reply_excerpt)'
+```
+
+Downvotes only:
+
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="tea-agent" AND jsonPayload.log_type="feedback" AND jsonPayload.rating="down"' \
+  --project=gen-lang-client-0393777014 \
+  --freshness=30d \
+  --limit=100 \
+  --format=json
+```
+
+One tester (`user_id` is `tg-` plus the numeric Telegram id):
+
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="tea-agent" AND jsonPayload.log_type="feedback" AND jsonPayload.user_id="tg-111111"' \
+  --project=gen-lang-client-0393777014 \
+  --freshness=30d \
+  --limit=50 \
+  --format=json
+```
+
+Fallback, when the POST did not reach tea-agent (same payload, on the Telegram service):
+
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="telegram-integration" AND (jsonPayload.log_type="feedback" OR textPayload:"tea-sommelier.feedback")' \
+  --project=gen-lang-client-0393777014 \
+  --freshness=30d \
+  --limit=50 \
+  --format=json
+```
+
+Console: Logging → Logs Explorer, resource Cloud Run Revision, service `tea-agent`, query `jsonPayload.log_type="feedback"`.
+
+This code does not deploy and does not read or change the live webhook. The lines show up after the next approved `--execute`.
 
 ---
 
@@ -634,6 +725,7 @@ Then set `GOOGLE_CLOUD_AGENT_ENGINE_ID` (and usually `GOOGLE_CLOUD_AGENT_ENGINE_
 | Lint | `agents-cli lint` |
 | Local Telegram | `uv run python -m telegram_integration` |
 | Add beta testers | [§6.1](#61-closed-beta-allowlist-and-rate-limit) (`TELEGRAM_ALLOWED_USER_IDS`, semicolons) |
+| Read beta feedback | [§6.2](#62-in-chat-feedback) (`jsonPayload.log_type="feedback"` on `tea-agent`) |
 | Local tea-agent HTTP | `uv run uvicorn tea_agent.fast_api_app:app --host 127.0.0.1 --port 8080` |
 | Upsert secrets | `uv run python scripts/setup_secret_manager.py` |
 | Deploy dry-run | `uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014` |

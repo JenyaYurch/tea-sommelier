@@ -41,9 +41,11 @@ Rate limit
 ----------
 Each allowed user gets ``TELEGRAM_RATE_LIMIT_PER_MINUTE`` messages (default 4)
 and ``TELEGRAM_RATE_LIMIT_PER_DAY`` messages (default 30, UTC day). The check
-runs before tea-agent for ordinary text and for inline-button callbacks.
-``0`` disables that bucket. Counters are in-memory and reset when the process
-restarts. Admins use the same caps: they share the one Gemini key.
+runs before tea-agent for ordinary text and for next-step inline buttons
+(мягче, дешевле, and the rest). 👍 / 👎, ``/feedback``, and ``/help`` do not
+consume a token and do not call the model. ``0`` disables that bucket.
+Counters are in-memory and reset when the process restarts. Admins use the
+same caps: they share the one Gemini key.
 """
 
 from __future__ import annotations
