@@ -26,6 +26,12 @@ from telegram.ext import (
     filters,
 )
 
+from telegram_integration.access import (
+    INVITE_ACCEPTED_TEXT,
+    AccessGate,
+    get_access_gate,
+    load_access_config,
+)
 from telegram_integration.adk_client import (
     TEA_AGENT_ERROR,
     TEA_COLD_START,
@@ -273,15 +279,77 @@ async def _run_agent_and_reply(
     await _deliver_reply(target, reply)
 
 
+def _start_code(context: ContextTypes.DEFAULT_TYPE) -> str:
+    args = getattr(context, "args", None) or []
+    if not args:
+        return ""
+    return str(args[0]).strip()
+
+
+def _turn_block_text(gate: AccessGate, user_id: int) -> str | None:
+    """Refusal to send instead of calling tea-agent, or None when the turn is allowed.
+
+    Rate-limit tokens are consumed only after the allowlist check, so a
+    stranger cannot fill the counter, and a blocked user never reaches the agent.
+    """
+    if not gate.is_allowed(user_id):
+        logger.info("blocked non-allowlisted telegram user %s", user_id)
+        return gate.denied_text()
+    decision = gate.consume_rate(user_id)
+    if not decision.allowed:
+        logger.info("rate limited telegram user %s window=%s", user_id, decision.reason)
+        return decision.user_text
+    return None
+
+
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.message:
-        await update.message.reply_text(START_TEXT)
+    message = update.message
+    user = update.effective_user
+    if not message or not user:
+        return
+    gate = get_access_gate(context.application.bot_data)
+    code = _start_code(context)
+    # Compare the invite code only on /start, and only spend a rate-limit
+    # token for someone who is not already approved (slows guessing).
+    if code and gate.config.invite_code and not gate.is_allowed(user.id):
+        decision = gate.consume_rate(user.id)
+        if not decision.allowed:
+            await message.reply_text(decision.user_text)
+            return
+        if gate.redeem_invite(user.id, code):
+            logger.info(
+                "invite redeemed by telegram user %s; add this id to "
+                "TELEGRAM_ALLOWED_USER_IDS to keep access across restarts",
+                user.id,
+            )
+            await message.reply_text(INVITE_ACCEPTED_TEXT + START_TEXT)
+            return
+        await message.reply_text(gate.denied_text(code_rejected=True))
+        return
+    if code and gate.redeem_invite(user.id, code):
+        logger.info(
+            "invite redeemed by telegram user %s; add this id to "
+            "TELEGRAM_ALLOWED_USER_IDS to keep access across restarts",
+            user.id,
+        )
+        await message.reply_text(INVITE_ACCEPTED_TEXT + START_TEXT)
+        return
+    if not gate.is_allowed(user.id):
+        logger.info("blocked non-allowlisted telegram user %s", user.id)
+        await message.reply_text(gate.denied_text())
+        return
+    await message.reply_text(START_TEXT)
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.message
     user = update.effective_user
     if not message or not message.text or not user:
+        return
+    gate = get_access_gate(context.application.bot_data)
+    refusal = _turn_block_text(gate, user.id)
+    if refusal is not None:
+        await message.reply_text(refusal)
         return
     await _run_agent_and_reply(
         target=message,
@@ -301,6 +369,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     message = query.message if isinstance(query.message, Message) else None
     if not label or message is None:
         await query.answer()
+        return
+    gate = get_access_gate(context.application.bot_data)
+    refusal = _turn_block_text(gate, user.id)
+    if refusal is not None:
+        await query.answer()
+        await message.reply_text(refusal)
         return
     await query.answer()
     await _run_agent_and_reply(
@@ -331,6 +405,22 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.exception("Telegram handler error", exc_info=err)
 
 
+def _attach_access(application: Application, *, webhook: bool) -> None:
+    config = load_access_config(webhook=webhook)
+    application.bot_data["access_gate"] = AccessGate(config)
+    logger.info(
+        "beta access enforced=%s allowlist=%d admins=%d invite_code=%s "
+        "rate_limit=%s/min %s/day "
+        "(invite grants are in-memory and reset on restart)",
+        config.enforced,
+        len(config.allowed_user_ids),
+        len(config.admin_user_ids),
+        "set" if config.invite_code else "unset",
+        config.rate_limit_per_minute,
+        config.rate_limit_per_day,
+    )
+
+
 def _attach_backend(application: Application, *, webhook: bool) -> None:
     client = _adk_http_client()
     if client is not None:
@@ -358,6 +448,7 @@ def main() -> None:
         .concurrent_updates(True)
         .build()
     )
+    _attach_access(application, webhook=webhook)
     _attach_backend(application, webhook=webhook)
     application.add_handler(CommandHandler("start", start_cmd))
     application.add_handler(

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from telegram_integration.deploy_spec import (
     ADK_APP_NAME,
     AGENT_SERVICE,
@@ -15,6 +17,8 @@ from telegram_integration.deploy_spec import (
     agent_restart_args,
     is_webhook_mode,
     telegram_deploy_args,
+    telegram_env_vars,
+    telegram_secret_bindings,
     telegram_update_env_args,
     webhook_url,
 )
@@ -29,12 +33,87 @@ def test_webhook_mode_needs_port_and_service_url() -> None:
     assert not is_webhook_mode(port=None, service_url=None)
 
 
+def _clear_beta_deploy_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "TELEGRAM_ACCESS_MODE",
+        "TELEGRAM_ALLOWED_USER_IDS",
+        "TELEGRAM_ADMIN_USER_IDS",
+        "TELEGRAM_INVITE_CODE",
+        "TELEGRAM_RATE_LIMIT_PER_MINUTE",
+        "TELEGRAM_RATE_LIMIT_PER_DAY",
+        "TELEGRAM_ALLOWLIST_SECRET",
+        "TELEGRAM_INVITE_CODE_SECRET",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_telegram_deploy_fails_closed_and_forwards_allowlist_without_commas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_beta_deploy_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USER_IDS", "11, 22;33")
+    monkeypatch.setenv("TELEGRAM_ADMIN_USER_IDS", "11")
+    monkeypatch.setenv("TELEGRAM_INVITE_CODE", "pilot-code")
+    env = telegram_env_vars(
+        adk_server_url="https://tea-agent.example",
+        service_url="https://telegram.example",
+    )
+    assignments = env.split(",")
+    assert all(piece.count("=") >= 1 for piece in assignments)
+    values = dict(piece.split("=", 1) for piece in assignments)
+    assert values["TELEGRAM_ACCESS_MODE"] == "closed"
+    assert values["TELEGRAM_ALLOWED_USER_IDS"] == "11;22;33"
+    assert values["TELEGRAM_ADMIN_USER_IDS"] == "11"
+    assert values["TELEGRAM_INVITE_CODE"] == "pilot-code"
+    assert values["TELEGRAM_RATE_LIMIT_PER_MINUTE"] == "4"
+    assert values["TELEGRAM_RATE_LIMIT_PER_DAY"] == "30"
+    assert values["SERVICE_URL"] == "https://telegram.example"
+
+
+def test_telegram_invite_and_allowlist_secrets_are_not_plaintext(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_beta_deploy_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_INVITE_CODE_SECRET", "1")
+    monkeypatch.setenv("TELEGRAM_ALLOWLIST_SECRET", "1")
+    monkeypatch.setenv("TELEGRAM_INVITE_CODE", "super-secret")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USER_IDS", "11,22")
+    args = telegram_deploy_args(
+        project="demo-proj",
+        adk_server_url="https://tea-agent.example",
+        service_url="https://telegram.example",
+    )
+    secrets = next(item for item in args if item.startswith("--set-secrets="))
+    env = next(item for item in args if item.startswith("--set-env-vars="))
+    assert "TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest" in secrets
+    assert "TELEGRAM_INVITE_CODE=TELEGRAM_INVITE_CODE:latest" in secrets
+    assert "TELEGRAM_ALLOWED_USER_IDS=TELEGRAM_ALLOWED_USER_IDS:latest" in secrets
+    assert "super-secret" not in env
+    assert "TELEGRAM_ALLOWED_USER_IDS=" not in env
+    assert telegram_secret_bindings() == secrets.removeprefix("--set-secrets=")
+
+
+def test_plaintext_invite_code_with_comma_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_beta_deploy_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_INVITE_CODE", "a,b")
+    with pytest.raises(SystemExit):
+        telegram_env_vars(
+            adk_server_url="https://tea-agent.example",
+            service_url="https://telegram.example",
+        )
+
+
 def test_webhook_url_hides_nothing_but_uses_token_path() -> None:
     url = webhook_url("svc.run.app", "bot-token-value")
     assert url == "https://svc.run.app/bot-token-value"
 
 
-def test_two_stage_telegram_uses_placeholder_then_real_url() -> None:
+def test_two_stage_telegram_uses_placeholder_then_real_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_beta_deploy_env(monkeypatch)
     agent = "https://tea-agent-xyz.run.app"
     stage1 = telegram_deploy_args(
         project="demo-proj",
@@ -59,6 +138,10 @@ def test_two_stage_telegram_uses_placeholder_then_real_url() -> None:
     env2 = next(item for item in stage2 if item.startswith("--set-env-vars="))
     assert f"SERVICE_URL={real}" in env2
     assert "google.com" not in env2
+    assert "TELEGRAM_ACCESS_MODE=closed" in env1
+    assert "TELEGRAM_ACCESS_MODE=closed" in env2
+    assert "TELEGRAM_RATE_LIMIT_PER_MINUTE=4" in env2
+    assert "TELEGRAM_RATE_LIMIT_PER_DAY=30" in env2
 
 
 def test_agent_deploy_uses_secret_manager_not_plaintext_key(monkeypatch) -> None:
