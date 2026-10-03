@@ -388,7 +388,7 @@ uv run python scripts/parse_teashop.py --status
 uv run python scripts/parse_teashop.py
 ```
 
-Spot-check 2–3 product URLs and prices, then commit the JSON. Dry-run:
+Spot-check 2–3 product URLs, prices, and stock, then commit the JSON. Listing cards mark stock on the parent `li` (`instock` / `outofstock`); if that signal is missing the row stays `unknown` and is not offered as a buy link. If category HTML returns 403, the script falls back to the WooCommerce store API (`is_in_stock`) instead of guessing. Dry-run:
 
 ```bash
 uv run python scripts/parse_teashop.py --max-pages 6 --dry-run
