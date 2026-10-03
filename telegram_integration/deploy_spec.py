@@ -13,6 +13,25 @@ from tea_agent.app_utils.session_uri import (
     EPHEMERAL_SESSIONS_ENV,
     normalize_cloud_sql_instance,
 )
+from telegram_integration.access import (
+    DEFAULT_RATE_LIMIT_PER_DAY,
+    DEFAULT_RATE_LIMIT_PER_MINUTE,
+    ENV_ACCESS_MODE,
+    ENV_ADMIN_USER_IDS,
+    ENV_ALLOWED_USER_IDS,
+    ENV_INVITE_CODE,
+    ENV_RATE_LIMIT_PER_DAY,
+    ENV_RATE_LIMIT_PER_MINUTE,
+    parse_user_ids,
+)
+
+# TEA-36 deploy-shell flags. They are not read by the bot process.
+# 1 / true mounts the named Secret Manager secret as that env var.
+ENV_ALLOWLIST_SECRET = "TELEGRAM_ALLOWLIST_SECRET"
+ENV_INVITE_CODE_SECRET = "TELEGRAM_INVITE_CODE_SECRET"
+_ACCESS_MODES = frozenset(
+    {"auto", "open", "closed", "enforce", "on", "off", "disabled"}
+)
 
 DEFAULT_PROJECT = "gen-lang-client-0393777014"
 CLOUD_RUN_REGION = "europe-central2"
@@ -88,19 +107,94 @@ def agent_env_vars(
     return ",".join(parts)
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _rate_env(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw or not raw.isdigit():
+        return default
+    return int(raw)
+
+
+def _beta_id_list(env_name: str) -> str | None:
+    """Semicolon-joined ids. gcloud splits --set-env-vars on commas."""
+    ids = sorted(parse_user_ids(os.environ.get(env_name, "")))
+    if not ids:
+        return None
+    return ";".join(str(user_id) for user_id in ids)
+
+
+def telegram_beta_env_parts() -> list[str]:
+    """TEA-36 env appended to telegram-integration --set-env-vars.
+
+    Cloud Run defaults to ``TELEGRAM_ACCESS_MODE=closed`` (fail closed).
+    Tester ids and a plaintext invite code are forwarded only when the deploy
+    shell set them, so a dry-run does not invent an allowlist. Id lists use
+    semicolons because gcloud splits this string on commas.
+    """
+    mode = os.environ.get(ENV_ACCESS_MODE, "").strip().lower() or "closed"
+    if mode not in _ACCESS_MODES:
+        mode = "closed"
+    parts = [
+        f"{ENV_ACCESS_MODE}={mode}",
+        f"{ENV_RATE_LIMIT_PER_MINUTE}="
+        f"{_rate_env(ENV_RATE_LIMIT_PER_MINUTE, DEFAULT_RATE_LIMIT_PER_MINUTE)}",
+        f"{ENV_RATE_LIMIT_PER_DAY}="
+        f"{_rate_env(ENV_RATE_LIMIT_PER_DAY, DEFAULT_RATE_LIMIT_PER_DAY)}",
+    ]
+    if not _env_flag(ENV_ALLOWLIST_SECRET):
+        allowed = _beta_id_list(ENV_ALLOWED_USER_IDS)
+        if allowed:
+            parts.append(f"{ENV_ALLOWED_USER_IDS}={allowed}")
+    admins = _beta_id_list(ENV_ADMIN_USER_IDS)
+    if admins:
+        parts.append(f"{ENV_ADMIN_USER_IDS}={admins}")
+    if not _env_flag(ENV_INVITE_CODE_SECRET):
+        invite = os.environ.get(ENV_INVITE_CODE, "").strip()
+        if invite:
+            if any(char in invite for char in ", \t\r\n"):
+                raise SystemExit(
+                    "TELEGRAM_INVITE_CODE cannot contain commas or spaces in "
+                    "--set-env-vars. Set TELEGRAM_INVITE_CODE_SECRET=1 and "
+                    "mount the Secret Manager secret instead."
+                )
+            parts.append(f"{ENV_INVITE_CODE}={invite}")
+    return parts
+
+
+def telegram_secret_bindings() -> str:
+    """Secret Manager env bindings for telegram-integration.
+
+    ``TELEGRAM_BOT_TOKEN`` is always mounted. TEA-36 opt-in flags in the
+    deploy shell (not bot runtime config):
+
+    * ``TELEGRAM_ALLOWLIST_SECRET=1`` also mounts ``TELEGRAM_ALLOWED_USER_IDS``
+    * ``TELEGRAM_INVITE_CODE_SECRET=1`` also mounts ``TELEGRAM_INVITE_CODE``
+    """
+    bindings = ["TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest"]
+    if _env_flag(ENV_ALLOWLIST_SECRET):
+        bindings.append("TELEGRAM_ALLOWED_USER_IDS=TELEGRAM_ALLOWED_USER_IDS:latest")
+    if _env_flag(ENV_INVITE_CODE_SECRET):
+        bindings.append("TELEGRAM_INVITE_CODE=TELEGRAM_INVITE_CODE:latest")
+    return ",".join(bindings)
+
+
 def telegram_env_vars(
     *,
     adk_server_url: str,
     service_url: str,
     app_name: str = ADK_APP_NAME,
 ) -> str:
-    return ",".join(
-        [
-            f"ADK_SERVER_URL={normalize_service_url(adk_server_url)}",
-            f"ADK_APP_NAME={app_name}",
-            f"SERVICE_URL={normalize_service_url(service_url)}",
-        ]
-    )
+    parts = [
+        f"ADK_SERVER_URL={normalize_service_url(adk_server_url)}",
+        f"ADK_APP_NAME={app_name}",
+        f"SERVICE_URL={normalize_service_url(service_url)}",
+    ]
+    # TEA-36: same beta env on the placeholder deploy and the SERVICE_URL update.
+    parts.extend(telegram_beta_env_parts())
+    return ",".join(parts)
 
 
 def agent_secret_bindings(*, cloud_sql_instance: str | None = None) -> str:
@@ -200,7 +294,7 @@ def telegram_deploy_args(
         f"--timeout={REQUEST_TIMEOUT}",
         f"--command={TELEGRAM_COMMAND}",
         f"--args={TELEGRAM_ARGS}",
-        "--set-secrets=TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest",
+        "--set-secrets=" + telegram_secret_bindings(),
         "--set-env-vars="
         + telegram_env_vars(
             adk_server_url=adk_server_url,

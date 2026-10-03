@@ -71,6 +71,12 @@ Optional:
 | `SESSION_SERVICE_URI` | Local sessions; polling defaults to sqlite `./sessions.db` |
 | `CLOUD_SQL_INSTANCE` | **Do not set** unless you want to pay for Postgres |
 | `GOOGLE_CLOUD_AGENT_ENGINE_ID` | **Do not set** unless you want Memory Bank |
+| `TELEGRAM_ALLOWED_USER_IDS` | Closed-beta allowlist. See [Closed beta](#61-closed-beta-allowlist-and-rate-limit) |
+| `TELEGRAM_ADMIN_USER_IDS` | Always allowed during the beta (still rate-limited) |
+| `TELEGRAM_INVITE_CODE` | One-time `/start <code>` access. In-memory until restart |
+| `TELEGRAM_ACCESS_MODE` | `auto` (default), `closed`, or `open` |
+| `TELEGRAM_RATE_LIMIT_PER_MINUTE` | Default `4`. `0` disables the minute cap |
+| `TELEGRAM_RATE_LIMIT_PER_DAY` | Default `30` (UTC day). `0` disables the daily cap |
 
 ### GCP login (deploy / status only)
 
@@ -208,6 +214,8 @@ uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 -
 | Cloud SQL | Kept (if TEA-14 verify passed) |
 | Agent Engine sessions | Kept |
 
+A new telegram-integration revision also clears in-memory invite-code grants and per-user rate counters. Ids in `TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_ADMIN_USER_IDS` are read again from the environment and stay approved. See [Closed beta](#61-closed-beta-allowlist-and-rate-limit).
+
 ---
 
 ## 5. Check status
@@ -318,6 +326,125 @@ Then start polling. Do not paste the token into tickets or commits.
 | Сейчас упёрлись в лимит бесплатного Gemini… | AI Studio quota (flash-lite is higher RPD than flash; still per project) |
 | Запрос слишком долгий… | `/run` timeout (120s) |
 | Сомелье временно недоступен… | Generic HTTP/agent failure |
+| Бот сейчас в закрытой бете… | Telegram user is not on the allowlist, not an admin, and has not redeemed the invite code in this process |
+| Код не подошёл… | `/start` argument did not match `TELEGRAM_INVITE_CODE` |
+| Слишком много сообщений за минуту… | Per-user minute cap (`TELEGRAM_RATE_LIMIT_PER_MINUTE`, default 4) |
+| На сегодня сообщений достаточно… | Per-user UTC daily cap (`TELEGRAM_RATE_LIMIT_PER_DAY`, default 30) |
+
+---
+
+## 6.1 Closed beta allowlist and rate limit
+
+Everyone shares one free-tier Gemini key. During the pilot and the closed beta, `telegram-integration` refuses unknown Telegram users **before** it calls `tea-agent`, and caps how many agent turns each approved user can send.
+
+This section is the owner runbook. Shipping the code does not by itself change the live bot: deploy is a separate explicit `--execute`.
+
+### Behavior
+
+| Situation | Who can talk to tea-agent |
+| --- | --- |
+| Local polling, no allowlist and no invite code (`TELEGRAM_ACCESS_MODE` unset / `auto`) | Anyone. This keeps `uv run python -m telegram_integration` usable. |
+| Local polling with an allowlist or an invite code | Only those ids, admins, and people who redeem the code in this process |
+| Cloud Run webhook, mode `auto`, nothing else set | Nobody. Fail closed. |
+| Deployed telegram-integration | `TELEGRAM_ACCESS_MODE=closed` is set by `telegram_integration/deploy_spec.py`, so the gate is on even if the id list is still empty |
+| `TELEGRAM_ACCESS_MODE=open` | Anyone, including on Cloud Run. Leave this unset for the beta |
+| Admin id | Always allowed when the gate is on, including when the id is missing from the allowlist. The same per-user rate limit applies |
+
+A refused user gets a short Russian closed-beta reply. Their text is not sent to `tea-agent`. The same check runs for inline-button presses.
+
+### Defaults
+
+| Variable | Default |
+| --- | --- |
+| `TELEGRAM_ACCESS_MODE` | `auto` in the process. Cloud Run deploy writes `closed` |
+| `TELEGRAM_RATE_LIMIT_PER_MINUTE` | `4` |
+| `TELEGRAM_RATE_LIMIT_PER_DAY` | `30` (resets at 00:00 UTC) |
+
+`0` on a rate-limit variable turns that bucket off. Any other non-number keeps the default. The minute window is a fixed unix minute (a user can send 4 just before the boundary and 4 just after). Text messages and inline buttons both count. `/start` by itself does not. A wrong invite code does, so guessing is capped.
+
+Five pilot testers at the daily cap are 150 agent calls. Before the 30–50 person beta, lower `TELEGRAM_RATE_LIMIT_PER_DAY` if the shared Gemini key is close to its project quota.
+
+### What is remembered after a restart
+
+`telegram-integration` keeps invite approvals and rate counters in process memory. There is one Cloud Run instance for the beta; a second instance would not share that memory. Nothing is written to disk or to the ADK session.
+
+| Data | After a new revision, crash, or scale-to-zero |
+| --- | --- |
+| `TELEGRAM_ALLOWED_USER_IDS` | Still approved. Read from env / Secret Manager on startup |
+| `TELEGRAM_ADMIN_USER_IDS` | Still approved |
+| Invite-code grants | Forgotten. The code still works; the tester sends `/start <code>` again |
+| Minute and daily counters | Reset |
+
+When someone redeems a code, the log line is `invite redeemed by telegram user <id>`. Copy that id into the allowlist if they should not have to send the code again after the next deploy. A blocked stranger is logged as `blocked non-allowlisted telegram user <id>` (the message text is not logged).
+
+### Add the 5 pilot testers
+
+No code change. You need each person's numeric Telegram id and your own id as admin.
+
+1. Collect ids. Each tester opens `@userinfobot` and sends you the `Id` number. Or, once this revision is deployed and the bot is closed, they send `/start` and you read `blocked non-allowlisted telegram user <id>`:
+
+```bash
+gcloud run services logs read telegram-integration --project=gen-lang-client-0393777014 --region=europe-central2 --limit=80
+```
+
+2. Put your id in `TELEGRAM_ADMIN_USER_IDS` and the five tester ids in `TELEGRAM_ALLOWED_USER_IDS`. Separate ids with semicolons. gcloud splits env assignments on commas, so a comma inside the id list is parsed as another variable.
+
+3. If this revision is not live yet, export the ids in the same shell as the deploy so both stages of `scripts/deploy_cloud_run.py` keep them. Dry-run first. `--execute` still needs explicit approval and is not part of the code change:
+
+```bash
+export TELEGRAM_ALLOWED_USER_IDS='111111;222222;333333;444444;555555'
+export TELEGRAM_ADMIN_USER_IDS='111111'
+uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014
+uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 --execute
+```
+
+The script also sets `TELEGRAM_ACCESS_MODE=closed`, `TELEGRAM_RATE_LIMIT_PER_MINUTE=4`, and `TELEGRAM_RATE_LIMIT_PER_DAY=30`.
+
+4. If the revision is already running, add testers with a service update (new revision; invite grants and rate counters reset; the allowlist is loaded from env):
+
+```bash
+gcloud run services update telegram-integration --project=gen-lang-client-0393777014 --region=europe-central2 --update-env-vars=TELEGRAM_ALLOWED_USER_IDS=111111;222222;333333;444444;555555,TELEGRAM_ADMIN_USER_IDS=111111
+```
+
+5. Check. Each of the five sends `/start` and gets the sommelier greeting. A sixth account gets the closed-beta reply and does not reach tea-agent. Confirm the env without printing secrets:
+
+```bash
+gcloud run services describe telegram-integration --project=gen-lang-client-0393777014 --region=europe-central2 --format="yaml(spec.template.spec.containers[0].env)"
+```
+
+A later `--execute` uses `--set-env-vars` and replaces the whole env block. Export `TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_ADMIN_USER_IDS` again in that shell, or the new revision comes up closed with an empty allowlist.
+
+### Invite code (when you do not have the numeric id yet)
+
+The code is one token. For a `t.me/<bot>?start=<code>` link, use letters, digits, `_`, and `-`, up to 64 characters. The tester can also type `/start <code>`.
+
+Prefer Secret Manager so the code is not a plaintext Cloud Run env value. Create it once (type the code, then Ctrl-D; do not commit it):
+
+```bash
+gcloud secrets create TELEGRAM_INVITE_CODE --project=gen-lang-client-0393777014 --data-file=-
+```
+
+If the secret already exists, add a version instead of `create`:
+
+```bash
+gcloud secrets versions add TELEGRAM_INVITE_CODE --project=gen-lang-client-0393777014 --data-file=-
+```
+
+Mount it on the running service:
+
+```bash
+gcloud run services update telegram-integration --project=gen-lang-client-0393777014 --region=europe-central2 --update-secrets=TELEGRAM_INVITE_CODE=TELEGRAM_INVITE_CODE:latest
+```
+
+The bot reads the env var `TELEGRAM_INVITE_CODE`. A matching `/start` adds that user only until this process exits.
+
+To keep that mount across the next full deploy, export `TELEGRAM_INVITE_CODE_SECRET=1` in the deploy shell. The deploy command's `--set-secrets` list otherwise contains only `TELEGRAM_BOT_TOKEN` and drops the invite secret. The same pattern exists for the allowlist: store semicolon- or comma-separated ids in secret `TELEGRAM_ALLOWED_USER_IDS` and export `TELEGRAM_ALLOWLIST_SECRET=1`. A plaintext `TELEGRAM_INVITE_CODE` in the deploy shell is forwarded only when it has no commas and no spaces.
+
+### Change the caps
+
+```bash
+gcloud run services update telegram-integration --project=gen-lang-client-0393777014 --region=europe-central2 --update-env-vars=TELEGRAM_RATE_LIMIT_PER_MINUTE=4,TELEGRAM_RATE_LIMIT_PER_DAY=30
+```
 
 ---
 
@@ -443,6 +570,7 @@ Then set `GOOGLE_CLOUD_AGENT_ENGINE_ID` (and usually `GOOGLE_CLOUD_AGENT_ENGINE_
 | Unit + integration tests | `uv run pytest tests/unit tests/integration` |
 | Lint | `agents-cli lint` |
 | Local Telegram | `uv run python -m telegram_integration` |
+| Add beta testers | [§6.1](#61-closed-beta-allowlist-and-rate-limit) (`TELEGRAM_ALLOWED_USER_IDS`, semicolons) |
 | Local tea-agent HTTP | `uv run uvicorn tea_agent.fast_api_app:app --host 127.0.0.1 --port 8080` |
 | Upsert secrets | `uv run python scripts/setup_secret_manager.py` |
 | Deploy dry-run | `uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014` |
