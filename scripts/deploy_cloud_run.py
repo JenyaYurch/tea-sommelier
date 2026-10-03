@@ -7,8 +7,8 @@ scale-to-zero / a new revision. Set ``CLOUD_SQL_INSTANCE`` or
 ``GOOGLE_CLOUD_AGENT_ENGINE_ID`` to attach a persistent backend instead.
 
 Usage:
-    uv run python scripts/deploy_cloud_run.py
-    uv run python scripts/deploy_cloud_run.py --execute
+    uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014
+    uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 --execute
 """
 
 from __future__ import annotations

@@ -4,6 +4,8 @@
 **Стек:** Google ADK Framework · Telegram · tea.support API · teashop.by (affiliate-каталог)
 **Дата:** сентябрь 2026
 
+Команды деплоя и окружения, которые совпадают с репозиторием: [docs/HOW_TO.md](docs/HOW_TO.md) (`scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014`). Раздел 6 ниже — исходный набросок, не ранбук.
+
 ---
 
 ## 1. Концепция и позиционирование

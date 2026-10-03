@@ -16,11 +16,14 @@
 import os
 
 from google.adk.agents import Agent
+from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.apps import App
 from google.adk.models import Gemini
 from google.adk.tools.preload_memory_tool import PreloadMemoryTool
+from google.adk.utils.instructions_utils import inject_session_state
 from google.genai import types
 
+from tea_agent.app_utils.session_uri import session_profile_durability
 from tea_agent.brewing_agent import brewing_agent
 from tea_agent.memory import generate_memories_callback
 from tea_agent.next_steps import attach_next_steps_to_response, collect_shop_hits
@@ -38,7 +41,25 @@ from tea_agent.tools import (
 
 MODEL = os.environ.get("TEA_AGENT_MODEL", "gemini-3.1-flash-lite")
 
-INSTRUCTION = """
+_PROFILE_PERSISTENCE_LINES = {
+    "persistent": (
+        "Профиль вкуса (user-scoped, постоянное хранилище сессий: переживает "
+        "рестарт сервиса; если пусто — ещё не собран):"
+    ),
+    "local_file": (
+        "Профиль вкуса (user-scoped, локальный файл сессий: переживает "
+        "перезапуск этого процесса на этой машине, но не деплой и не замену "
+        "контейнера Cloud Run; если пусто — ещё не собран):"
+    ),
+    "memory": (
+        "Профиль вкуса (user-scoped, только память этого процесса: пропадает "
+        "после рестарта сервиса, нового ревизиона или scale-to-zero; не обещай, "
+        "что он сохранится; если пусто — ещё не собран):"
+    ),
+}
+_PROFILE_LINE_MARK = "___PROFILE_PERSISTENCE_LINE___"
+
+INSTRUCTION_TEMPLATE = """
 Ты — сомелье по китайскому чаю витрины: зелёный, белый, жёлтый, красный (black tea),
 шен/шу пуэр и GABA. Зелёный — самая глубокая экспертиза, но не единственный тип.
 Отвечай пользователю по-русски. Данные tea.support приходят на английском — переводи смысл, не выдумывай факты.
@@ -48,7 +69,7 @@ INSTRUCTION = """
 Японский чай, кофе, алкоголь, травы — коротко вне специализации; для японского зелёного можно предложить китайский аналог через tools.
 Не заканчивай диалог фразой «я сомелье только по зелёному».
 
-Профиль вкуса (user-scoped, переживает рестарт сервиса; если пусто — ещё не собран):
+___PROFILE_PERSISTENCE_LINE___
 - experience: {user:experience?}
 - taste_profile: {user:taste_profile?}
 - budget: {user:budget?}
@@ -98,13 +119,37 @@ INSTRUCTION = """
 Не выдавай случайный чай как точное совпадение незнакомого имени: сначала resolve_tea, при not_found — уточни или search_teas по вайбу.
 """
 
+
+def profile_persistence_line() -> str:
+    """Honest profile sentence for the session backend configured right now."""
+    return _PROFILE_PERSISTENCE_LINES[session_profile_durability()]
+
+
+def instruction_text() -> str:
+    """Instruction with placeholders intact and a backend-specific profile line."""
+    line = profile_persistence_line()
+    if _PROFILE_LINE_MARK not in INSTRUCTION_TEMPLATE:
+        raise RuntimeError("profile persistence marker missing from instruction")
+    return INSTRUCTION_TEMPLATE.replace(_PROFILE_LINE_MARK, line, 1)
+
+
+async def build_instruction(readonly_context: ReadonlyContext) -> str:
+    """Fill session-state placeholders after choosing the persistence sentence.
+
+    A callable instruction bypasses ADK's own injection, so this calls
+    ``inject_session_state`` itself. The sentence is chosen per turn so it
+    matches sqlite applied after import (local Telegram polling).
+    """
+    return await inject_session_state(instruction_text(), readonly_context)
+
+
 root_agent = Agent(
     name="tea_sommelier",
     model=Gemini(
         model=MODEL,
         retry_options=types.HttpRetryOptions(attempts=3),
     ),
-    instruction=INSTRUCTION,
+    instruction=build_instruction,
     description="Sommelier for Chinese tea: green, white, yellow, red, puerh, GABA.",
     tools=[
         resolve_tea,

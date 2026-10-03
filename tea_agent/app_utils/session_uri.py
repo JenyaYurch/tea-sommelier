@@ -14,7 +14,10 @@ scale-to-zero / new revision).
 from __future__ import annotations
 
 import os
+from typing import Literal
 from urllib.parse import parse_qs, quote, urlparse
+
+ProfileDurability = Literal["persistent", "local_file", "memory"]
 
 LOCAL_SQLITE_URI = "sqlite+aiosqlite:///./sessions.db"
 DEFAULT_DB_USER = "postgres"
@@ -101,6 +104,28 @@ def is_ephemeral_session_uri(uri: str) -> bool:
     if scheme in {"agentengine", "agent-engine"}:
         return False
     return True
+
+
+def session_profile_durability() -> ProfileDurability:
+    """How long the taste profile lives for the backend this process will use.
+
+    Same precedence as ``get_session_service``: an explicit session URI, then
+    Cloud SQL, then Agent Engine sessions, then in-memory. Postgres and Agent
+    Engine survive a service restart. A sqlite/file URI survives a process
+    restart on a normal disk and does not survive Cloud Run instance
+    replacement. In-memory state is gone when the process exits.
+    """
+    uri = resolve_session_service_uri()
+    on_cloud_run = bool((os.environ.get(CLOUD_RUN_SERVICE_ENV) or "").strip())
+    if uri:
+        if not is_ephemeral_session_uri(uri):
+            return "persistent"
+        if on_cloud_run:
+            return "memory"
+        return "local_file"
+    if agent_engine_id_from_env():
+        return "persistent"
+    return "memory"
 
 
 def postgres_unix_socket_path(uri: str) -> str | None:
