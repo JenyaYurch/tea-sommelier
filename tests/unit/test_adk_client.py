@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from tea_agent.app_utils.agent_auth import AUTH_HEADER
 from telegram_integration.adk_client import (
     TEA_AGENT_ERROR,
     TEA_COLD_START,
@@ -22,6 +23,46 @@ from telegram_integration.adk_client import (
     payload_looks_like_quota,
     session_has_quota_error,
 )
+
+
+@pytest.mark.asyncio
+async def test_ask_sends_configured_secret_and_omits_it_in_dev(monkeypatch) -> None:
+    monkeypatch.delenv("TEA_AGENT_AUTH_SECRET", raising=False)
+    seen: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get(AUTH_HEADER))
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": "s"})
+        return httpx.Response(200, json=[{"content": {"parts": [{"text": "ok"}]}}])
+
+    open_client = AdkHttpClient(
+        "https://tea-agent.example",
+        "tea_agent",
+        transport=httpx.MockTransport(handler),
+    )
+    assert await open_client.ask("tg-1", "tg-sess-1", "hi") == "ok"
+    assert seen == [None, None]
+
+    monkeypatch.setenv("TEA_AGENT_AUTH_SECRET", "from-env")
+    seen.clear()
+
+    def authed(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get(AUTH_HEADER))
+        if request.method == "GET":
+            return httpx.Response(404, text="missing")
+        if request.url.path.endswith("/sessions/tg-sess-1"):
+            return httpx.Response(200, json={"id": "tg-sess-1"})
+        return httpx.Response(200, json=[{"content": {"parts": [{"text": "ok"}]}}])
+
+    env_client = AdkHttpClient(
+        "https://tea-agent.example",
+        "tea_agent",
+        transport=httpx.MockTransport(authed),
+    )
+    assert await env_client.ask("tg-1", "tg-sess-1", "hi") == "ok"
+    assert seen
+    assert set(seen) == {"from-env"}
 
 
 def test_normalize_strips_run_suffix() -> None:

@@ -62,6 +62,7 @@ def test_write_profile_patches_existing_empty_session(monkeypatch) -> None:
     """Telegram ensure_session POSTs {} first; --write must still store user: keys."""
     mod = _load()
     calls: list[tuple[str, object]] = []
+    seen: dict[str, object] = {}
 
     class FakeResponse:
         def __init__(self, status_code, payload):
@@ -74,7 +75,7 @@ def test_write_profile_patches_existing_empty_session(monkeypatch) -> None:
 
     class FakeClient:
         def __init__(self, **kwargs):
-            pass
+            seen["headers"] = kwargs.get("headers")
 
         def __enter__(self):
             return self
@@ -101,8 +102,10 @@ def test_write_profile_patches_existing_empty_session(monkeypatch) -> None:
             calls.append(("POST", json))
             raise AssertionError("must not recreate an existing session")
 
+    monkeypatch.setenv("TEA_AGENT_AUTH_SECRET", "probe-secret")
     monkeypatch.setattr(mod.httpx, "Client", FakeClient)
     body = mod.write_profile("https://tea-agent.example/apps/x")
+    assert seen["headers"] == {"X-Tea-Agent-Token": "probe-secret"}
     assert calls[0][0] == "GET"
     assert calls[1] == ("PATCH", {"state_delta": mod.PROFILE})
     assert body["state"]["user:experience"] == "новичок"

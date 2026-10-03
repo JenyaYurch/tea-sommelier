@@ -25,6 +25,7 @@ from google.adk.runners import Runner
 
 from tea_agent.app_utils import services
 from tea_agent.app_utils.a2a import attach_a2a_routes
+from tea_agent.app_utils.agent_auth import AgentAuthMiddleware, dev_ui_enabled
 from tea_agent.app_utils.typing import Feedback
 
 load_dotenv()
@@ -80,7 +81,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app: FastAPI = get_fast_api_app(
     agents_dir=AGENT_DIR,
-    web=True,
+    web=dev_ui_enabled(),
     artifact_service_uri=services.ARTIFACT_SERVICE_URI,
     allow_origins=allow_origins,
     session_service_uri=services.SESSION_SERVICE_URI,
@@ -89,6 +90,7 @@ app: FastAPI = get_fast_api_app(
     lifespan=lifespan,
     auto_create_session=True,
 )
+app.add_middleware(AgentAuthMiddleware)
 app.title = "tea-sommelier"
 app.description = "API for interacting with the Agent tea-sommelier"
 
