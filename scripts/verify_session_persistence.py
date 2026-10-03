@@ -8,7 +8,9 @@ confirms the taste profile is still there.
     uv run python scripts/verify_session_persistence.py --base-url URL --check
 
 Does not create Cloud SQL or deploy. Default telegram user 140014 is a probe id,
-not a real chat.
+not a real chat. Cloud Run tea-agent expects ``X-Tea-Agent-Token``. Put
+``TEA_AGENT_AUTH_SECRET`` in the environment or .env; this script sends it
+and does not print it. Local uvicorn with the secret unset does not require it.
 """
 
 from __future__ import annotations
@@ -17,7 +19,9 @@ import argparse
 import sys
 
 import httpx
+from dotenv import load_dotenv
 
+from tea_agent.app_utils.agent_auth import request_headers
 from telegram_integration.adk_client import DEFAULT_APP_NAME, normalize_adk_base_url
 from telegram_integration.keyboard import telegram_session_id, telegram_user_key
 
@@ -37,6 +41,10 @@ def session_url(base_url: str, telegram_user_id: int, app_name: str = DEFAULT_AP
     return f"{base}/apps/{app_name}/users/{user_id}/sessions/{session_id}"
 
 
+def _client() -> httpx.Client:
+    return httpx.Client(timeout=20.0, headers=request_headers())
+
+
 def _patch_profile(client: httpx.Client, url: str) -> dict:
     patched = client.patch(url, json={"state_delta": PROFILE})
     if patched.status_code not in {200, 201}:
@@ -50,7 +58,7 @@ def write_profile(url: str) -> dict:
     Telegram webhook ``ensure_session`` POSTs ``{}`` first. A GET 200 empty
     session must still receive ``user:`` keys via ADK PATCH state_delta.
     """
-    with httpx.Client(timeout=20.0) as client:
+    with _client() as client:
         existing = client.get(url)
         if existing.status_code == 200:
             return _patch_profile(client, url)
@@ -67,7 +75,7 @@ def write_profile(url: str) -> dict:
 
 
 def check_profile(url: str) -> dict:
-    with httpx.Client(timeout=20.0) as client:
+    with _client() as client:
         loaded = client.get(url)
     if loaded.status_code != 200:
         raise SystemExit(
@@ -83,6 +91,7 @@ def check_profile(url: str) -> dict:
 
 
 def main() -> None:
+    load_dotenv()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", required=True, help="tea-agent origin, no secrets")
     parser.add_argument("--telegram-user-id", type=int, default=PROBE_TELEGRAM_USER_ID)

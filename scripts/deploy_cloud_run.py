@@ -2,9 +2,13 @@
 
 Does not deploy unless you pass --execute (explicit approval).
 Default is the cheap path: no Memory Bank, no Cloud SQL. Sessions are
-in-memory (``TEA_ALLOW_EPHEMERAL_SESSIONS``); taste profiles reset on
-scale-to-zero / a new revision. Set ``CLOUD_SQL_INSTANCE`` or
+in-memory (``TEA_ALLOW_EPHEMERAL_SESSIONS``). tea-agent is pinned to one
+instance (max 1, min 1 by default) so idle scale-to-zero does not wipe them;
+a new revision still does. Set ``CLOUD_SQL_INSTANCE`` or
 ``GOOGLE_CLOUD_AGENT_ENGINE_ID`` to attach a persistent backend instead.
+
+tea-agent requires Secret Manager secret ``TEA_AGENT_AUTH_SECRET`` before
+``--execute``. Create it once (docs/HOW_TO.md). Do not commit the value.
 
 Usage:
     uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014
@@ -21,8 +25,12 @@ import sys
 import time
 from pathlib import Path
 
+from tea_agent.app_utils.agent_auth import AUTH_HEADER, AUTH_SECRET_ENV
+from tea_agent.app_utils.session_uri import normalize_cloud_sql_instance
 from telegram_integration.deploy_spec import (
     ADK_APP_NAME,
+    AGENT_CONCURRENCY,
+    AGENT_MAX_INSTANCES,
     AGENT_SERVICE,
     CLOUD_RUN_REGION,
     DEFAULT_PROJECT,
@@ -31,11 +39,11 @@ from telegram_integration.deploy_spec import (
     PLACEHOLDER_SERVICE_URL,
     TELEGRAM_SERVICE,
     agent_deploy_args,
+    agent_min_instances,
     agent_restart_args,
     telegram_deploy_args,
     telegram_update_env_args,
 )
-from tea_agent.app_utils.session_uri import normalize_cloud_sql_instance
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_APIS = (
@@ -47,7 +55,7 @@ REQUIRED_APIS = (
     "storage.googleapis.com",
     "sqladmin.googleapis.com",
 )
-SECRETS = ("GOOGLE_API_KEY", "TELEGRAM_BOT_TOKEN")
+SECRETS = ("GOOGLE_API_KEY", "TELEGRAM_BOT_TOKEN", AUTH_SECRET_ENV)
 CLOUD_SQL_CLIENT_ROLE = "roles/cloudsql.client"
 BUILDER_ROLE = "roles/run.builder"
 IAM_SETTLE_SEC = 30
@@ -207,11 +215,29 @@ def _print_plan(project: str, region: str) -> None:
     elif engine_id:
         print("  Sessions: Agent Engine (GOOGLE_CLOUD_AGENT_ENGINE_ID)")
     else:
+        floor = agent_min_instances()
+        idle = (
+            "Profiles reset on scale-to-zero and on a new revision."
+            if floor == "0"
+            else (
+                "min-instances keeps the process up while idle. "
+                "Profiles still reset on a new revision."
+            )
+        )
         print(
             "  Sessions: in-memory (TEA_ALLOW_EPHEMERAL_SESSIONS). "
-            "Taste profiles reset on scale-to-zero / new revision. "
+            f"tea-agent max-instances={AGENT_MAX_INSTANCES} "
+            f"min-instances={floor} concurrency={AGENT_CONCURRENCY}. "
+            f"{idle} "
             "Will not create Cloud SQL tea-sessions."
         )
+    print(
+        "  Access: shared secret "
+        f"{AUTH_SECRET_ENV} (header {AUTH_HEADER}). "
+        "Create that secret before --execute (docs/HOW_TO.md). "
+        "tea-agent stays --allow-unauthenticated so /health is open; "
+        "the app returns 401 without the header. ADK dev UI is off."
+    )
     print()
     print(
         "1. gcloud",
@@ -422,9 +448,34 @@ def _verify_after_deploy(project: str, region: str, agent_url: str) -> None:
     print("TEA-14: taste profile survived Cloud Run revision restart")
 
 
+def _require_auth_secret(project: str) -> None:
+    """Fail before deploy when the shared secret has not been created."""
+    proc = _gcloud(
+        [
+            "secrets",
+            "describe",
+            AUTH_SECRET_ENV,
+            f"--project={project}",
+            "--format=value(name)",
+        ]
+    )
+    if proc.returncode == 0 and proc.stdout.strip():
+        return
+    _fail(
+        f"Secret {AUTH_SECRET_ENV} is missing in {project}. "
+        "Create it once before deploy (value is not stored in git):\n"
+        f"  openssl rand -base64 32\n"
+        f"  printf '%s' '<value>' | gcloud secrets create {AUTH_SECRET_ENV} "
+        f"--project={project} --replication-policy=automatic --data-file=-\n"
+        "Then rerun this script with --execute. It grants secretAccessor "
+        "to the Compute Engine default service account. See docs/HOW_TO.md."
+    )
+
+
 def _execute(project: str, region: str, *, skip_verify: bool = False) -> None:
     print(f"Using GCP project {project}")
     print(f"Cloud Run region {region}")
+    _require_auth_secret(project)
     _gcloud(["config", "set", "project", project])
     _gcloud(["config", "set", "run/region", region])
     _enable_apis(project)

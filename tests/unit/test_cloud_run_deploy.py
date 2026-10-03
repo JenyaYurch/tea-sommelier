@@ -127,7 +127,12 @@ def test_two_stage_telegram_uses_placeholder_then_real_url(
     assert TELEGRAM_SERVICE in stage1
     assert f"--command={TELEGRAM_COMMAND}" in stage1
     assert f"--args={TELEGRAM_ARGS}" in stage1
-    assert any("TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest" in item for item in stage1)
+    assert any(
+        "TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest" in item
+        and "TEA_AGENT_AUTH_SECRET=TEA_AGENT_AUTH_SECRET:latest" in item
+        for item in stage1
+    )
+    assert "--max-instances=1" not in stage1
 
     real = "https://telegram-integration-xyz.run.app"
     stage2 = telegram_update_env_args(
@@ -146,19 +151,31 @@ def test_two_stage_telegram_uses_placeholder_then_real_url(
 
 def test_agent_deploy_uses_secret_manager_not_plaintext_key(monkeypatch) -> None:
     monkeypatch.delenv("TEA_AGENT_MODEL", raising=False)
+    monkeypatch.delenv("TEA_AGENT_MIN_INSTANCES", raising=False)
     args = agent_deploy_args(project="demo-proj")
     joined = " ".join(args)
+    env = next(item for item in args if item.startswith("--set-env-vars="))
+    secrets = next(item for item in args if item.startswith("--set-secrets="))
     assert AGENT_SERVICE in args
     assert "--source" in args
-    assert "GOOGLE_API_KEY=GOOGLE_API_KEY:latest" in joined
+    assert "GOOGLE_API_KEY=GOOGLE_API_KEY:latest" in secrets
+    assert "TEA_AGENT_AUTH_SECRET=TEA_AGENT_AUTH_SECRET:latest" in secrets
+    assert "TEA_AGENT_AUTH_SECRET=" not in env
     assert "AIza" not in joined
     assert "--allow-unauthenticated" in args
+    assert "--no-allow-unauthenticated" not in args
     assert "--execution-environment=gen2" in args
+    assert "--max-instances=1" in args
+    assert "--min-instances=1" in args
+    assert "--concurrency=8" in args
+    assert "--cpu-throttling" in args
+    assert "--no-cpu-throttling" not in args
     assert "GOOGLE_CLOUD_AGENT_ENGINE_ID=" not in joined
     assert "--add-cloudsql-instances" not in joined
     assert "--set-cloudsql-instances=" not in joined
     assert "--clear-cloudsql-instances" in args
     assert "TEA_ALLOW_EPHEMERAL_SESSIONS=true" in joined
+    assert "TEA_AGENT_DEV_UI=false" in env
     assert "TEA_AGENT_MODEL=gemini-3.1-flash-lite" in joined
     assert "SESSION_DB_PASSWORD" not in joined
 
@@ -198,6 +215,7 @@ def test_agent_deploy_adds_cloud_sql_socket_without_db_password() -> None:
     assert "SESSION_DB_USER=tea_agent" in env
     assert "SESSION_DB_NAME=tea_sessions" in env
     assert "SESSION_DB_PASSWORD=SESSION_DB_PASSWORD:latest" in secrets
+    assert "TEA_AGENT_AUTH_SECRET=TEA_AGENT_AUTH_SECRET:latest" in secrets
     assert "TEA_ALLOW_EPHEMERAL_SESSIONS" not in env
     assert "--clear-cloudsql-instances" not in args
     assert "postgresql+" not in joined
@@ -252,6 +270,8 @@ def test_agent_fast_api_auto_creates_named_telegram_sessions() -> None:
     text = (ROOT / "tea_agent" / "fast_api_app.py").read_text(encoding="utf-8")
     assert "auto_create_session=True" in text
     assert "session_service_uri=services.SESSION_SERVICE_URI" in text
+    assert "web=dev_ui_enabled()" in text
+    assert "app.add_middleware(AgentAuthMiddleware)" in text
 
 
 def test_dockerignore_keeps_env_out_of_image() -> None:
@@ -352,6 +372,7 @@ def test_dry_run_plan_includes_write_restart_check(capsys, monkeypatch) -> None:
 
 def test_dry_run_plan_says_ephemeral_sessions_not_create_sql(capsys, monkeypatch) -> None:
     mod = _load_deploy_module()
+    monkeypatch.delenv("TEA_AGENT_MIN_INSTANCES", raising=False)
     monkeypatch.setattr(mod, "_agent_engine_env", lambda: (None, None))
     monkeypatch.setattr(
         mod, "_cloud_sql_env", lambda: (None, "tea_agent", "tea_sessions")
@@ -365,6 +386,12 @@ def test_dry_run_plan_says_ephemeral_sessions_not_create_sql(capsys, monkeypatch
     assert "--clear-cloudsql-instances" in out
     assert "--set-cloudsql-instances=" not in out
     assert "verify_session_persistence.py --write" not in out
+    assert "--max-instances=1" in out
+    assert "--min-instances=1" in out
+    assert "--concurrency=8" in out
+    assert "TEA_AGENT_AUTH_SECRET" in out
+    assert "X-Tea-Agent-Token" in out
+    assert "401" in out
 
 
 def test_verify_after_deploy_writes_restarts_and_checks(monkeypatch) -> None:
@@ -486,6 +513,46 @@ def test_execute_skips_verify_without_persistent_backend(monkeypatch) -> None:
     assert order.index("tea-agent") < order.index(
         "telegram-integration stage 1 (placeholder SERVICE_URL)"
     )
+
+
+def test_agent_min_instances_can_drop_to_zero(monkeypatch) -> None:
+    monkeypatch.setenv("TEA_AGENT_MIN_INSTANCES", "0")
+    args = agent_deploy_args(project="demo-proj")
+    assert "--min-instances=0" in args
+    assert "--max-instances=1" in args
+
+
+def test_agent_min_instances_rejects_non_integer_and_above_max(monkeypatch) -> None:
+    monkeypatch.setenv("TEA_AGENT_MIN_INSTANCES", "nope")
+    with pytest.raises(ValueError, match="non-negative integer"):
+        agent_deploy_args(project="demo-proj")
+    monkeypatch.setenv("TEA_AGENT_MIN_INSTANCES", "2")
+    with pytest.raises(ValueError, match="cannot exceed"):
+        agent_deploy_args(project="demo-proj")
+
+
+def test_deploy_script_requires_auth_secret_before_execute(capsys, monkeypatch) -> None:
+    mod = _load_deploy_module()
+
+    class Proc:
+        returncode = 1
+        stdout = ""
+        stderr = "NOT_FOUND"
+
+    monkeypatch.setattr(mod, "_gcloud", lambda args: Proc())
+    with pytest.raises(SystemExit):
+        mod._require_auth_secret("demo-proj")
+    err = capsys.readouterr().err
+    assert "TEA_AGENT_AUTH_SECRET" in err
+    assert "secrets create" in err
+    assert "secretAccessor" in err
+
+
+def test_deploy_script_grants_auth_secret_to_runtime_sa() -> None:
+    mod = _load_deploy_module()
+    assert "TEA_AGENT_AUTH_SECRET" in mod.SECRETS
+    assert "GOOGLE_API_KEY" in mod.SECRETS
+    assert "TELEGRAM_BOT_TOKEN" in mod.SECRETS
 
 
 def test_verify_cli_retries_transient_failure(monkeypatch) -> None:

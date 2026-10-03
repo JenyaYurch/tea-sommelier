@@ -18,7 +18,9 @@ Two ways to talk to the same agent:
 
 Telegram allows **one** getUpdates client. Do not run local polling while the Cloud Run webhook is active.
 
-**Default production (cheap):** Cloud Run, AI Studio Gemini key, **no Cloud SQL**, **no Memory Bank**. Taste profiles live in memory and reset on scale-to-zero or a new revision.
+**Default production (cheap):** Cloud Run, AI Studio Gemini key, **no Cloud SQL**, **no Memory Bank**. Taste profiles live in the memory of one `tea-agent` instance (`--max-instances=1`, `--min-instances=1`). Idle time does not wipe them. A new revision still does. Set `TEA_AGENT_MIN_INSTANCES=0` before deploy only if you accept scale-to-zero.
+
+**Who can call `tea-agent`:** only `telegram-integration`. The Cloud Run proxy still allows unauthenticated TCP so `/health` stays open, and the app returns **401** on `/run`, session routes, and the dev UI unless the request sends `X-Tea-Agent-Token`. The token is Secret Manager secret `TEA_AGENT_AUTH_SECRET`, mounted on both services. The ADK dev UI is off in prod (`TEA_AGENT_DEV_UI=false`) and on when you run uvicorn locally with that flag unset. Telegram itself calls `telegram-integration`, never `tea-agent`. Do not publish the `tea-agent` URL.
 
 **Optional paid persistence:** Cloud SQL (`tea-sessions`) and/or Agent Engine Memory Bank. Both are opt-in and require `--execute` on their setup scripts.
 
@@ -71,6 +73,8 @@ Optional:
 | `SESSION_SERVICE_URI` | Local sessions; polling defaults to sqlite `./sessions.db` |
 | `CLOUD_SQL_INSTANCE` | **Do not set** unless you want to pay for Postgres |
 | `GOOGLE_CLOUD_AGENT_ENGINE_ID` | **Do not set** unless you want Memory Bank |
+| `TEA_AGENT_AUTH_SECRET` | Leave unset locally. Set only to exercise the prod header check |
+| `TEA_AGENT_MIN_INSTANCES` | Deploy only. Default `1`. `0` allows scale-to-zero |
 | `TELEGRAM_ALLOWED_USER_IDS` | Closed-beta allowlist. See [Closed beta](#61-closed-beta-allowlist-and-rate-limit) |
 | `TELEGRAM_ADMIN_USER_IDS` | Always allowed during the beta (still rate-limited) |
 | `TELEGRAM_INVITE_CODE` | One-time `/start <code>` access. In-memory until restart |
@@ -96,6 +100,34 @@ uv run python scripts/setup_secret_manager.py
 ```
 
 This script has no `--project` flag. `GOOGLE_CLOUD_PROJECT` in the shell or `.env` overrides the default `gen-lang-client-0393777014`.
+
+### Shared secret for tea-agent (once, before the next `--execute`)
+
+`telegram-integration` and `tea-agent` share `TEA_AGENT_AUTH_SECRET`. The value never goes in git. Generate it locally and create the secret (the `printf` form avoids a trailing newline):
+
+```bash
+openssl rand -base64 32
+printf '%s' 'PASTE_THE_VALUE' | gcloud secrets create TEA_AGENT_AUTH_SECRET \
+  --project=gen-lang-client-0393777014 \
+  --replication-policy=automatic \
+  --data-file=-
+```
+
+Rotate later with `gcloud secrets versions add TEA_AGENT_AUTH_SECRET --project=gen-lang-client-0393777014 --data-file=-` the same way. Do not `echo` the value (that appends a newline) and do not paste it into tickets or shell history if you can avoid it.
+
+Both Cloud Run services run as the Compute Engine default service account. `--execute` grants that account `roles/secretmanager.secretAccessor` on `TEA_AGENT_AUTH_SECRET` (and on the other deploy secrets). To grant it yourself:
+
+```bash
+PROJECT_NUMBER=$(gcloud projects describe gen-lang-client-0393777014 --format='value(projectNumber)')
+gcloud secrets add-iam-policy-binding TEA_AGENT_AUTH_SECRET \
+  --project=gen-lang-client-0393777014 \
+  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role=roles/secretmanager.secretAccessor
+```
+
+Leave `TEA_AGENT_AUTH_SECRET` unset in local `.env` unless you want the local HTTP server to require the header too. Local polling does not call Cloud Run.
+
+Why this is not IAM-only: the deploy path does not set a dedicated service account, so `roles/run.invoker` on the default compute account would also cover Cloud Build and any other workload on that account. A header checked in the app is what `telegram-integration` can send with one line, and it fails closed when `K_SERVICE` is set and the secret is missing.
 
 ---
 
@@ -161,8 +193,10 @@ A cheap-path plan looks like this:
 
 - Memory Bank: off
 - Sessions: in-memory (`TEA_ALLOW_EPHEMERAL_SESSIONS`)
+- `tea-agent`: `--max-instances=1`, `--min-instances=1` (override with `TEA_AGENT_MIN_INSTANCES=0`), `--concurrency=8`, `--cpu-throttling`
 - Will **not** create Cloud SQL `tea-sessions`
 - `gcloud run deploy tea-agent ... --clear-cloudsql-instances`
+- Secret `TEA_AGENT_AUTH_SECRET` on both services (name only; create it first or `--execute` stops)
 - Two-stage Telegram: placeholder `SERVICE_URL=https://google.com`, then the real Cloud Run URL
 
 ### Execute (explicit approval)
@@ -173,13 +207,16 @@ uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 -
 
 What `--execute` does:
 
-1. Enables required APIs, grants Cloud Run builder IAM.
-2. Deploys `tea-agent` from source (Dockerfile: uvicorn on port 8080, copies `data/`).
-3. Skips TEA-14 write/restart/check when there is no Cloud SQL / Agent Engine.
-4. Deploys `telegram-integration` with a placeholder `SERVICE_URL`.
-5. Updates `SERVICE_URL` to the real Telegram service URL (webhook path `<SERVICE_URL>/<TELEGRAM_BOT_TOKEN>`).
+1. Checks that Secret Manager already has `TEA_AGENT_AUTH_SECRET`. It does not create the value.
+2. Enables required APIs, grants Cloud Run builder IAM, and grants `secretAccessor` on the deploy secrets (including `TEA_AGENT_AUTH_SECRET`) to the compute default service account.
+3. Deploys `tea-agent` from source (Dockerfile: uvicorn on port 8080, copies `data/`). One instance, dev UI off, shared-secret header required.
+4. Skips TEA-14 write/restart/check when there is no Cloud SQL / Agent Engine.
+5. Deploys `telegram-integration` with a placeholder `SERVICE_URL` and the same auth secret (so it can call `tea-agent`).
+6. Updates `SERVICE_URL` to the real Telegram service URL (webhook path `<SERVICE_URL>/<TELEGRAM_BOT_TOKEN>`).
 
-During step 4 the webhook target is briefly `https://google.com`. Do not `/start` until the script prints **Deploy finished**.
+`telegram-integration` stays `--allow-unauthenticated` because Telegram’s servers cannot send a Google identity token. `tea-agent` also stays `--allow-unauthenticated` at the proxy; the process returns 401 without `X-Tea-Agent-Token`. `/health` does not require the header (Cloud Run’s default startup probe is TCP and does not send it). Step 6 replaces Telegram env vars only. It does not remove the secret mounted in step 5.
+
+During step 5 the webhook target is briefly `https://google.com`. Do not `/start` until the script prints **Deploy finished**.
 
 ### Switch model without a rebuild
 
@@ -208,11 +245,13 @@ uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 -
 
 ### What a new revision does to users
 
-| Backend | Taste profile after this deploy / scale-to-zero |
-| --- | --- |
-| In-memory (default) | Lost |
-| Cloud SQL | Kept (if TEA-14 verify passed) |
-| Agent Engine sessions | Kept |
+| Backend | Taste profile after a new revision | After idle, with default min-instances 1 |
+| --- | --- | --- |
+| In-memory (default) | Lost | Kept on that one instance. Lost if you set `TEA_AGENT_MIN_INSTANCES=0` and Cloud Run scales to zero, or if the platform replaces the instance. |
+| Cloud SQL | Kept (if TEA-14 verify passed) | Kept |
+| Agent Engine sessions | Kept | Kept |
+
+`--max-instances=1` stays even if you later attach Cloud SQL, until you change `AGENT_MAX_INSTANCES` in `telegram_integration/deploy_spec.py`. While sessions are in memory, do not raise it: a second instance has its own history. It also caps how many Gemini calls one traffic spike can start. `--concurrency=8` is the per-instance cap (Cloud Run’s default is 80, which is too many parallel `/run` calls on 1Gi). `--cpu-throttling` keeps request-based billing. Idle min-instance time is the lower idle rate (list price about $0.0000025 per vCPU-second and the same per GiB-second, so 1 vCPU + 1Gi is on the order of $13/month while the beta is quiet; check the [Cloud Run pricing](https://cloud.google.com/run/pricing) page for `europe-central2` before you rely on that). That is not the full-time vCPU price of instance-based billing (`--no-cpu-throttling`). Drop the floor with `TEA_AGENT_MIN_INSTANCES=0` on the next deploy if you would rather scale to zero.
 
 A new telegram-integration revision also clears in-memory invite-code grants and per-user rate counters. Ids in `TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_ADMIN_USER_IDS` are read again from the environment and stay approved. See [Closed beta](#61-closed-beta-allowlist-and-rate-limit).
 
@@ -238,25 +277,41 @@ gcloud run services describe telegram-integration --project=gen-lang-client-0393
 
 Confirm:
 
-- `tea-agent` env has `GOOGLE_GENAI_USE_VERTEXAI=false`, `TEA_AGENT_MODEL=gemini-3.1-flash-lite`, and, on the cheap path, `TEA_ALLOW_EPHEMERAL_SESSIONS=true`.
+- `tea-agent` env has `GOOGLE_GENAI_USE_VERTEXAI=false`, `TEA_AGENT_MODEL=gemini-3.1-flash-lite`, `TEA_AGENT_DEV_UI=false`, and, on the cheap path, `TEA_ALLOW_EPHEMERAL_SESSIONS=true`.
+- `TEA_AGENT_AUTH_SECRET` is a `secretKeyRef`, not a plaintext `value`, on both services.
 - No `CLOUD_SQL_INSTANCE` and no `GOOGLE_CLOUD_AGENT_ENGINE_ID` unless you opted in.
-- Telegram `ADK_SERVER_URL` equals the tea-agent URL.
+- Telegram `ADK_SERVER_URL` equals the tea-agent URL from the describe output. Do not copy that URL into git, Notion, or chat.
 - Telegram `SERVICE_URL` equals the telegram-integration URL (not `https://google.com`).
 
-Current URLs (they stay stable across revisions unless you recreate the service):
-
-```text
-https://tea-agent-6zy2uwhjla-lm.a.run.app
-https://telegram-integration-6zy2uwhjla-lm.a.run.app
-```
-
-HTTP check (`tea-agent` is deployed `--allow-unauthenticated`; Telegram calls `telegram-integration`, and only that service calls `tea-agent` via `ADK_SERVER_URL`):
+Scaling (annotations `autoscaling.knative.dev/maxScale` and `minScale`, plus `containerConcurrency`):
 
 ```bash
-curl -s -o NUL -w "%{http_code}" https://tea-agent-6zy2uwhjla-lm.a.run.app/apps/tea_agent/users/tg-warmup/sessions/tg-sess-warmup
+gcloud run services describe tea-agent \
+  --project=gen-lang-client-0393777014 \
+  --region=europe-central2 \
+  --format="yaml(spec.template.metadata.annotations,spec.template.spec.containerConcurrency)"
 ```
 
-`404` is healthy (no such session). `000` / timeout often means cold start — retry after 30s. `500` on first request after a bad revision: read logs.
+Expect `maxScale: '1'`, `minScale: '1'`, and `containerConcurrency: 8`. `run.googleapis.com/cpu-throttling` should be absent or `true` (request-based billing). `false` means you are paying for a full-time vCPU.
+
+Lockdown check. `URL` comes from describe; an outsider has no header:
+
+```bash
+URL=$(gcloud run services describe tea-agent \
+  --project=gen-lang-client-0393777014 \
+  --region=europe-central2 \
+  --format='value(status.url)')
+
+curl -s -o /dev/null -w "%{http_code}\n" -X POST "$URL/run"
+curl -s -o /dev/null -w "%{http_code}\n" \
+  "$URL/apps/tea_agent/users/tg-1/sessions/tg-sess-1"
+curl -s -o /dev/null -w "%{http_code}\n" "$URL/health"
+curl -s -o /dev/null -w "%{http_code}\n" "$URL/dev-ui/"
+```
+
+Expect `401`, `401`, `200`, `401`. `/health` is the only open route. The dev UI is not mounted; with the secret, `/dev-ui/` is 404, and without it the middleware returns 401 before routing. Do not put the secret on the curl command line. Then send `/start` in Telegram. The bot should answer. If it says the sommelier is unavailable and tea-agent logs show `rejected tea-agent request`, the secret is missing on `telegram-integration` or the two services have different versions.
+
+PowerShell: `curl.exe -s -o NUL -w "%{http_code}"` with the same URLs. `000` / timeout often means cold start — retry after 30s. With min-instances 1 the first reply should not wait on a scale-from-zero. `500` on first request after a bad revision: read logs.
 
 ### Revisions
 
@@ -297,7 +352,7 @@ Memory Bank: if `GOOGLE_CLOUD_AGENT_ENGINE_ID` is absent from tea-agent env, Mem
 gcloud secrets list --project=gen-lang-client-0393777014 --format="value(name)"
 ```
 
-Expect `GOOGLE_API_KEY` and `TELEGRAM_BOT_TOKEN`. Do not `gcloud secrets versions access` in chat logs.
+Expect `GOOGLE_API_KEY`, `TELEGRAM_BOT_TOKEN`, and `TEA_AGENT_AUTH_SECRET`. Do not `gcloud secrets versions access` in chat logs.
 
 ---
 
@@ -438,7 +493,7 @@ gcloud run services update telegram-integration --project=gen-lang-client-039377
 
 The bot reads the env var `TELEGRAM_INVITE_CODE`. A matching `/start` adds that user only until this process exits.
 
-To keep that mount across the next full deploy, export `TELEGRAM_INVITE_CODE_SECRET=1` in the deploy shell. The deploy command's `--set-secrets` list otherwise contains only `TELEGRAM_BOT_TOKEN` and drops the invite secret. The same pattern exists for the allowlist: store semicolon- or comma-separated ids in secret `TELEGRAM_ALLOWED_USER_IDS` and export `TELEGRAM_ALLOWLIST_SECRET=1`. A plaintext `TELEGRAM_INVITE_CODE` in the deploy shell is forwarded only when it has no commas and no spaces.
+To keep that mount across the next full deploy, export `TELEGRAM_INVITE_CODE_SECRET=1` in the deploy shell. The deploy command's `--set-secrets` list otherwise contains `TELEGRAM_BOT_TOKEN` and `TEA_AGENT_AUTH_SECRET`, and drops the invite secret. The same pattern exists for the allowlist: store semicolon- or comma-separated ids in secret `TELEGRAM_ALLOWED_USER_IDS` and export `TELEGRAM_ALLOWLIST_SECRET=1`. A plaintext `TELEGRAM_INVITE_CODE` in the deploy shell is forwarded only when it has no commas and no spaces.
 
 ### Change the caps
 
@@ -536,12 +591,20 @@ uv run python scripts/setup_cloud_sql.py --project=gen-lang-client-0393777014
 uv run python scripts/setup_cloud_sql.py --project=gen-lang-client-0393777014 --execute
 ```
 
-Then put `CLOUD_SQL_INSTANCE=gen-lang-client-0393777014:europe-central2:tea-sessions` in the environment used by deploy (not git). Password is Secret Manager `SESSION_DB_PASSWORD`. Redeploy with `--execute`. TEA-14 probe:
+Then put `CLOUD_SQL_INSTANCE=gen-lang-client-0393777014:europe-central2:tea-sessions` in the environment used by deploy (not git). Password is Secret Manager `SESSION_DB_PASSWORD`. Redeploy with `--execute`. TEA-14 probe (use the URL from `gcloud run services describe`, and export the auth secret so the probe is not a 401; the script also reads it from `.env` and does not print it):
 
 ```bash
-uv run python scripts/verify_session_persistence.py --base-url https://tea-agent-6zy2uwhjla-lm.a.run.app --write
+URL=$(gcloud run services describe tea-agent \
+  --project=gen-lang-client-0393777014 \
+  --region=europe-central2 \
+  --format='value(status.url)')
+export TEA_AGENT_AUTH_SECRET="$(gcloud secrets versions access latest \
+  --secret=TEA_AGENT_AUTH_SECRET \
+  --project=gen-lang-client-0393777014)"
+uv run python scripts/verify_session_persistence.py --base-url "$URL" --write
 # new tea-agent revision (deploy script does this when SQL is attached)
-uv run python scripts/verify_session_persistence.py --base-url https://tea-agent-6zy2uwhjla-lm.a.run.app --check
+uv run python scripts/verify_session_persistence.py --base-url "$URL" --check
+unset TEA_AGENT_AUTH_SECRET
 ```
 
 Without `TEA_ALLOW_EPHEMERAL_SESSIONS`, Cloud Run **refuses** sqlite/in-memory so a restart cannot silently drop profiles.
@@ -596,7 +659,10 @@ A2A: the FastAPI app exposes A2A routes. Inspector: [A2A Inspector](https://gith
 | tea-agent crash loop, “persistent ADK session backend” | Missing `TEA_ALLOW_EPHEMERAL_SESSIONS` and no Cloud SQL / engine id |
 | Telegram conflict / getUpdates | Webhook + polling together; see §6 |
 | Empty or quota replies | AI Studio daily/minute limits; wait, or set `TEA_AGENT_MODEL=gemini-3.6-flash` on a paid tier |
-| First Telegram message hangs | Cold start; wait 30s |
+| First Telegram message hangs | Cold start; wait 30s. With min-instances 1 this should be rare |
+| `--execute` stops on `TEA_AGENT_AUTH_SECRET` | Create the secret first (§2). The script will not invent a value |
+| Bot replies «Не удалось открыть сессию…» or «Сбой на стороне сомелье…» and tea-agent logs `rejected tea-agent request` | Auth header missing or the two services have different secret versions |
+| `curl` to tea-agent `/run` returns 200 with no header | Old revision, or `K_SERVICE` and the secret are both unset. Prod must fail closed |
 | Bot works locally, Cloud Run outdated | Need `--execute` after git changes (including `data/*.json`) |
 | Invented tasting notes | Tools-only rule; check slug resolve + `get_tea_card` |
 | `agents-cli eval grade` ImportError `google.adk` | Use `scripts/grade_traces_local.py` |
@@ -608,4 +674,4 @@ A2A: the FastAPI app exposes A2A routes. Inspector: [A2A Inspector](https://gith
 - Never commit `.env`, `credentials.json`, or secret values.
 - `--execute` on deploy / Cloud SQL / Memory Bank is explicit approval. Dry-run first.
 - Do not change `MODEL` in `tea_agent/agent.py` unless you intend to.
-- Telegram calls `telegram-integration` (webhook). Only that service calls `tea-agent` (`ADK_SERVER_URL`). `tea-agent` is still deployed `--allow-unauthenticated`, so treat its URL as public. Locking that down is TEA-34; do not change the deploy flag from this guide.
+- Telegram calls `telegram-integration` (webhook). Only that service calls `tea-agent` (`ADK_SERVER_URL`), with header `X-Tea-Agent-Token`. The tea-agent URL is not a public API. Do not commit it. Unauthenticated `/run` and session reads must return 401. `/health` may return 200.

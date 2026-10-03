@@ -10,6 +10,8 @@ from typing import Any
 
 import httpx
 
+from tea_agent.app_utils.agent_auth import request_headers
+
 DEFAULT_APP_NAME = "tea_agent"
 SESSION_TIMEOUT_SEC = 10.0
 RUN_TIMEOUT_SEC = 120.0
@@ -195,11 +197,14 @@ class AdkHttpClient:
         *,
         timeout: float = RUN_TIMEOUT_SEC,
         transport: httpx.BaseTransport | None = None,
+        auth_secret: str | None = None,
     ) -> None:
         self.base_url = normalize_adk_base_url(base_url)
         self.app_name = app_name
         self.timeout = timeout
         self._transport = transport
+        # None reads TEA_AGENT_AUTH_SECRET at request time. "" sends no header.
+        self.auth_secret = auth_secret
 
     def _session_url(self, user_id: str, session_id: str) -> str:
         return (
@@ -261,7 +266,10 @@ class AdkHttpClient:
         _raise_for_status(response.status_code, response.text, scope="run")
 
     async def ask(self, user_id: str, session_id: str, text: str) -> str:
-        async with httpx.AsyncClient(transport=self._transport) as client:
+        async with httpx.AsyncClient(
+            transport=self._transport,
+            headers=request_headers(self.auth_secret),
+        ) as client:
             await self.ensure_session(client, user_id, session_id)
             response = await _await_adk(
                 client.post(
