@@ -70,6 +70,47 @@ def test_match_product_maps_new_types() -> None:
         assert confidence in {"high", "medium"}
 
 
+def test_match_product_prefers_longer_alias_and_safe_shop_names() -> None:
+    cases = [
+        ("Цзюнь Шань Инь Чжэнь, 2026 г.", "junshan-yin-zhen"),
+        ("БАЙ ХАО ИНЬ ЧЖЕНЬ (白毫银针), 2022. БаДу Чай.", "baihao-yinzhen"),
+        ("Шоу Мэй «Брови старца», 357 г., ф-ка Юкоу", "shou-mei"),
+        ("Лао Шоу Мэй, 2019 год", "shou-mei"),
+        ("Юэ Гуан Бай «Белый лунный свет», 2026 г.", "yueguang-bai"),
+        ("Мэндин Хуан Я «Желтые Почки», первый сбор, весна 2026 года", "mengding-huang-ya"),
+        ("Хо Шань Хуан Я, 2022 г.", "huoshan-huang-ya"),
+        ("Бай Линь Гун Фу, 2026 г.", "bai-lin-gongfu"),
+        ("Цимень Хун Ча (Кимун)", "qimen-hongcha"),
+        ("Цзинь Цзюнь Мэй #АА, 2026 г.", "jin-jun-mei"),
+        ("Инь Цзюнь Мэй «Серебряные Брови», 2026 г.", "yin-jun-mei"),
+        ("Чжэн Шань Сяо Чжун, 2026 г.", "zheng-shan-xiao-zhong"),
+        ("Лапсанг Сушонг (Сяо Чжун дымный)", "zheng-shan-xiao-zhong"),
+        ("ТАНЬ ЯН ГУНФУ (坦洋功夫). БаДу Чай.", "tanyang-gong-fu"),
+        ("Дворцовый пуэр «Гунтин»", "gongting-pu-er"),
+        ("Шен «Железный блин» Сягуань Тэ Бин, Т8633. 2007 год.", "xiaguan-tie-bing"),
+    ]
+    for name, expected in cases:
+        slug, confidence = match_product_to_slug(name)
+        assert slug == expected, (name, slug, confidence)
+        assert confidence in {"high", "medium"}
+
+
+def test_match_product_does_not_use_digit_or_generic_false_friends() -> None:
+    for name in [
+        "Мо Ли Цзюнь Мэй (茉莉骏眉), БадуЧай",
+        "Цзинь Сюань Хун Ча, Тайвань",
+        "Чай зелёный «Асамуши сенча» (AS), High-grade",
+        "ГАБА Алишань Опал",
+        "Грузинский байховый зеленый чай",
+    ]:
+        slug, confidence = match_product_to_slug(name)
+        assert slug is None, (name, slug)
+        assert confidence == "none"
+    # A year used to match Yinghong No. 1 because 英红1号 folds to "1".
+    slug, _confidence = match_product_to_slug("Лао Шоу Мэй, 2019 год")
+    assert slug != "ying-hong-1-hao"
+
+
 def test_match_product_skips_non_encyclopedia() -> None:
     for name in [
         "Чайный сет «Светлые»",
@@ -149,6 +190,70 @@ def test_find_products_by_slug(tmp_path: Path, monkeypatch) -> None:
     assert missing["status"] == "not_found"
 
 
+def test_find_in_shop_skips_out_of_stock(tmp_path: Path, monkeypatch) -> None:
+    catalog = {
+        "items": [
+            {
+                "product_name": "Хо Шань Хуан Я, 2022 г.",
+                "matched_slug": "huoshan-huang-ya",
+                "price_from_byn": 5.92,
+                "availability": "out_of_stock",
+                "product_url": "https://www.teashop.by/product/xo-shan-xuan-ya/",
+                "mapping_confidence": "high",
+            },
+            {
+                "product_name": "Хо Шань Хуан Я, 2024 г.",
+                "matched_slug": "huoshan-huang-ya",
+                "price_from_byn": 8.0,
+                "availability": "in_stock",
+                "product_url": "https://www.teashop.by/product/xo-shan-xuan-ya-new/",
+                "mapping_confidence": "high",
+            },
+            {
+                "product_name": "Чай без наличия",
+                "matched_slug": "huoshan-huang-ya",
+                "price_from_byn": 4.0,
+                "availability": "unknown",
+                "product_url": "https://www.teashop.by/product/xo-shan-unknown/",
+                "mapping_confidence": "low",
+            },
+        ]
+    }
+    path = tmp_path / "teashop_catalog.json"
+    path.write_text(json.dumps(catalog), encoding="utf-8")
+    monkeypatch.setattr("tea_agent.shop_catalog._catalog_path", lambda: path)
+    reload_catalog()
+
+    hits = find_products(slug="huoshan-huang-ya")
+    assert len(hits) == 1
+    assert hits[0]["availability"] == "in_stock"
+    assert hits[0]["product_url"].endswith("/xo-shan-xuan-ya-new/")
+
+    tool = find_in_shop(slug="huoshan-huang-ya")
+    assert tool["status"] == "success"
+    assert [row["availability"] for row in tool["products"]] == ["in_stock"]
+
+    sold_out = {
+        "items": [
+            {
+                "product_name": "Хо Шань Хуан Я, 2022 г.",
+                "matched_slug": "huoshan-huang-ya",
+                "price_from_byn": 5.92,
+                "availability": "out_of_stock",
+                "product_url": "https://www.teashop.by/product/xo-shan-xuan-ya/",
+                "mapping_confidence": "high",
+            }
+        ]
+    }
+    path.write_text(json.dumps(sold_out), encoding="utf-8")
+    reload_catalog()
+    missing = find_in_shop(query="Хо Шань Хуан Я")
+    assert missing["status"] == "out_of_stock"
+    assert missing["products"] == []
+    assert missing["unavailable"][0]["availability"] == "out_of_stock"
+    assert "buy link" in missing["hint"]
+
+
 def test_find_products_by_query(tmp_path: Path, monkeypatch) -> None:
     catalog = {
         "items": [
@@ -189,20 +294,26 @@ def test_find_products_by_query(tmp_path: Path, monkeypatch) -> None:
 
 def test_real_catalog_find_in_shop_mapped_slugs() -> None:
     reload_catalog()
-    for slug in [
-        "bai-mao-hou",
+    in_stock = [
         "meicha",
         "queshe-lucha",
         "ziyang-mao-jian",
         "moli-longzhu",
-        "moli-feng-yan",
         "yun-nan-mao-feng",
-        "pingshui-zhucha",
-    ]:
+    ]
+    sold_out = ["bai-mao-hou", "moli-feng-yan", "pingshui-zhucha"]
+    for slug in in_stock:
         result = find_in_shop(slug=slug)
         assert result["status"] == "success", slug
         assert result["products"][0]["product_url"]
+        assert result["products"][0]["availability"] == "in_stock"
         assert result["products"][0]["matched_slug"] == slug
+    for slug in sold_out:
+        result = find_in_shop(slug=slug)
+        assert result["status"] == "out_of_stock", slug
+        assert result["products"] == []
+        assert result["unavailable"][0]["matched_slug"] == slug
+        assert "buy link" in result["hint"]
 
 
 def test_real_catalog_finds_new_types_by_query() -> None:

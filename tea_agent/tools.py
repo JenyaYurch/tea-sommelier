@@ -191,26 +191,49 @@ def find_in_shop(slug: str = "", query: str = "") -> dict[str, Any]:
             "hint": "Pass slug from resolve_tea or a product name query.",
         }
     products = find_products(slug=slug_n or None, query=query_n or None, limit=5)
-    if not products:
+    if products:
         return {
-            "status": "not_found",
+            "status": "success",
+            "slug": slug_n or None,
+            "query": query_n or None,
+            "products": products,
+            "source": "teashop.by local catalog",
+            "note": (
+                "Prices are from teashop.by (BYN) for in-stock items only. "
+                "Always give the product_url. Do not offer sold-out items as a buy link. "
+                "Taste/terroir facts still come from tea.support tools."
+            ),
+        }
+    unavailable = find_products(
+        slug=slug_n or None,
+        query=query_n or None,
+        limit=5,
+        in_stock_only=False,
+    )
+    if unavailable:
+        kinds = {item.get("availability") for item in unavailable}
+        status = "out_of_stock" if kinds == {"out_of_stock"} else "unavailable"
+        return {
+            "status": status,
             "slug": slug_n or None,
             "query": query_n or None,
             "products": [],
+            "unavailable": unavailable,
             "hint": (
-                "No teashop.by match in the local catalog. "
-                "Recommend the tea by taste/brewing without inventing a price."
+                "Catalog matches are not in stock. Do not offer a buy link or "
+                "invent a price. Say that teashop.by currently has no in-stock "
+                "listing for this tea."
             ),
             "source": "teashop.by local catalog",
         }
     return {
-        "status": "success",
+        "status": "not_found",
         "slug": slug_n or None,
         "query": query_n or None,
-        "products": products,
-        "source": "teashop.by local catalog",
-        "note": (
-            "Prices are from teashop.by (BYN). Always give the product_url. "
-            "Taste/terroir facts still come from tea.support tools."
+        "products": [],
+        "hint": (
+            "No teashop.by match in the local catalog. "
+            "Recommend the tea by taste/brewing without inventing a price."
         ),
+        "source": "teashop.by local catalog",
     }

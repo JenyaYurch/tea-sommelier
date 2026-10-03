@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from tea_agent.slug_index import fold_text, known_tea_slugs, resolve_query
+from tea_agent.slug_index import fold_text, known_tea_slugs, load_teas, resolve_query
 
 # Refresh cadence for the partner feed (TEA-19).
 REFRESH_INTERVAL_DAYS = 14
@@ -95,6 +95,21 @@ def _product_url_key(product_url: str | None) -> str:
     return str(product_url).rstrip("/").rsplit("/", 1)[-1].lower()
 
 
+def _exact_zh_slug(product_name: str) -> str | None:
+    """Return a slug when the shop name contains exactly one tea's Chinese name."""
+    chunks = re.findall(r"[\u4e00-\u9fff]{2,}", product_name or "")
+    if not chunks:
+        return None
+    hits: set[str] = set()
+    for tea in load_teas():
+        zh_chunks = re.findall(r"[\u4e00-\u9fff]{2,}", str(tea.get("name_zh") or ""))
+        if any(chunk in zh_chunks for chunk in chunks):
+            hits.add(str(tea["slug"]))
+    if len(hits) == 1:
+        return next(iter(hits))
+    return None
+
+
 def match_product_to_slug(
     product_name: str,
     product_url: str | None = None,
@@ -103,6 +118,10 @@ def match_product_to_slug(
     url_key = _product_url_key(product_url)
     if url_key in URL_SLUG_OVERRIDES:
         return URL_SLUG_OVERRIDES[url_key]
+
+    zh_slug = _exact_zh_slug(product_name)
+    if zh_slug and zh_slug in known_tea_slugs():
+        return zh_slug, "high"
 
     matches = resolve_query(product_name, limit=3)
     allowed = known_tea_slugs()
@@ -143,13 +162,29 @@ def _shop_fold(value: str) -> str:
     return fold_text(value).replace("gaba", "габа")
 
 
+def is_buyable(availability: Any) -> bool:
+    """True when a catalog row may be offered as a buy link.
+
+    Missing availability is treated as buyable so older rows still resolve.
+    ``unknown`` and ``out_of_stock`` are not buyable.
+    """
+    if availability in (None, ""):
+        return True
+    return availability == "in_stock"
+
+
 def find_products(
     *,
     slug: str | None = None,
     query: str | None = None,
     limit: int = 5,
+    in_stock_only: bool = True,
 ) -> list[dict[str, Any]]:
-    """Find shop products by tea.support slug and/or free-text name."""
+    """Find shop products by tea.support slug and/or free-text name.
+
+    By default sold-out and unknown-stock rows are omitted so callers do not
+    turn them into buy links. Pass ``in_stock_only=False`` to see them.
+    """
     items = load_catalog()
     if not items:
         return []
@@ -178,6 +213,8 @@ def find_products(
                 if overlap and len(overlap) >= max(1, len(tokens) - 1):
                     score = max(score, 40 + 10 * len(overlap))
         if score:
+            if in_stock_only and not is_buyable(item.get("availability")):
+                continue
             scored.append((score, item))
 
     scored.sort(

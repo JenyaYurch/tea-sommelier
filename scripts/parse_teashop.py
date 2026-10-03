@@ -6,6 +6,12 @@ Biweekly refresh checklist (every 1–2 weeks):
   3. Spot-check 2–3 products (price / availability / product_url)
   4. Commit data/teashop_catalog.json when the feed looks good
 
+Stock: listing cards mark availability on the parent li (instock / outofstock),
+not on div.product-item. Unknown stock stays "unknown". If category HTML
+returns 403, the WooCommerce store API is used instead (is_in_stock).
+The writer refuses a catalog where every SKU is in_stock unless
+--allow-all-in-stock is set.
+
 Usage:
   uv run python scripts/parse_teashop.py --status
   uv run python scripts/parse_teashop.py
@@ -15,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import logging
 import re
@@ -42,6 +49,26 @@ from tea_agent.shop_catalog import (  # noqa: E402
 )
 
 logger = logging.getLogger("parse_teashop")
+
+# WooCommerce store API category ids for CATEGORY_URLS (stable term ids).
+# Used when category HTML returns 403. Stock comes from is_in_stock /
+# stock_availability, not from a missing CSS class.
+STORE_API_PRODUCTS = "https://www.teashop.by/wp-json/wc/store/v1/products"
+STORE_CATEGORY_IDS: dict[str, int] = {
+    "https://www.teashop.by/shop/chaj/beliy/": 27,
+    "https://www.teashop.by/shop/chaj/zheltiy/": 28,
+    "https://www.teashop.by/shop/chaj/zeleniy/": 25,
+    "https://www.teashop.by/shop/chaj/cherniy/": 24,
+    "https://www.teashop.by/shop/chaj/puer/": 45,
+    "https://www.teashop.by/shop/chaj/ulun/gaba/": 121,
+}
+_STOCK_OUT = "out_of_stock"
+_STOCK_IN = "in_stock"
+_STOCK_UNKNOWN = "unknown"
+
+
+class TeashopBlocked(RuntimeError):
+    """teashop.by refused an automated request (HTTP 403)."""
 
 # v1 shop scope: white, yellow, green, red, puer (sheng+shu), GABA.
 # Full oolong trees are a follow-up; GABA lives under ulun/gaba/.
@@ -123,14 +150,224 @@ def _extract_weight(form_tag: Any) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _class_tokens(classes: Any) -> set[str]:
+    if isinstance(classes, str):
+        return set(classes.split())
+    return {str(token) for token in (classes or [])}
+
+
+def _availability_from_classes(classes: Any) -> str | None:
+    tokens = _class_tokens(classes)
+    if "outofstock" in tokens or "out-of-stock" in tokens:
+        return _STOCK_OUT
+    if "instock" in tokens or "in-stock" in tokens:
+        return _STOCK_IN
+    return None
+
+
+def _availability_from_variations(node: Any) -> str | None:
+    form = node.select_one("form.variations_form") if hasattr(node, "select_one") else None
+    if form is None or not form.has_attr("data-product_variations"):
+        return None
+    raw = html.unescape(str(form["data-product_variations"]))
+    try:
+        variations = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(variations, list):
+        return None
+    flags = [
+        item.get("is_in_stock")
+        for item in variations
+        if isinstance(item, dict) and "is_in_stock" in item
+    ]
+    if not flags:
+        return None
+    if any(flag is False for flag in flags) and not any(flag is True for flag in flags):
+        return _STOCK_OUT
+    if any(flag is True for flag in flags):
+        return _STOCK_IN
+    return None
+
+
+def _availability_from_schema(node: Any) -> str | None:
+    if not hasattr(node, "select"):
+        return None
+    found_in = False
+    for link in node.select('link[itemprop="availability"], meta[itemprop="availability"]'):
+        href = str(link.get("href") or link.get("content") or "").lower()
+        if "outofstock" in href:
+            return _STOCK_OUT
+        if "instock" in href:
+            found_in = True
+    return _STOCK_IN if found_in else None
+
+
+def _availability_from_text(node: Any) -> str | None:
+    if not hasattr(node, "get_text"):
+        return None
+    text = node.get_text(" ", strip=True).lower().replace("ё", "е")
+    if "нет в наличии" in text or "нет на складе" in text:
+        return _STOCK_OUT
+    if "в наличии" in text:
+        return _STOCK_IN
+    return None
+
+
 def _availability(product: Any) -> str:
-    classes = " ".join(product.get("class") or [])
-    if "outofstock" in classes or "out-of-stock" in classes:
-        return "out_of_stock"
-    sold = product.select_one(".out-of-stock, .stock.out-of-stock")
-    if sold:
-        return "out_of_stock"
-    return "in_stock"
+    """Read WooCommerce stock. Unknown stays unknown — never assume in stock.
+
+    Circolare listing cards put ``instock`` / ``outofstock`` on the parent
+    ``li.product-grid-container-inner``. The inner ``div.product-item`` has
+    neither class, so reading only that node marks every SKU in stock.
+    """
+    signals: list[str] = []
+    node = product
+    first = True
+    for _ in range(6):
+        if node is None or not hasattr(node, "get"):
+            break
+        if getattr(node, "name", None) in {"body", "html", "[document]"}:
+            break
+        class_signal = _availability_from_classes(node.get("class"))
+        if class_signal:
+            signals.append(class_signal)
+        if first:
+            if hasattr(node, "select_one"):
+                if node.select_one("p.stock.out-of-stock, .stock.out-of-stock"):
+                    signals.append(_STOCK_OUT)
+                elif node.select_one("p.stock.in-stock, .stock.in-stock"):
+                    signals.append(_STOCK_IN)
+            schema_signal = _availability_from_schema(node)
+            if schema_signal:
+                signals.append(schema_signal)
+            variation_signal = _availability_from_variations(node)
+            if variation_signal:
+                signals.append(variation_signal)
+            text_signal = _availability_from_text(node)
+            if text_signal:
+                signals.append(text_signal)
+            first = False
+        node = getattr(node, "parent", None)
+    if _STOCK_OUT in signals:
+        return _STOCK_OUT
+    if _STOCK_IN in signals:
+        return _STOCK_IN
+    return _STOCK_UNKNOWN
+
+
+def availability_from_store_product(product: dict[str, Any]) -> str:
+    """Map a WooCommerce store API product to in_stock / out_of_stock / unknown."""
+    stock = product.get("stock_availability") or {}
+    if not isinstance(stock, dict):
+        stock = {}
+    css = str(stock.get("class") or "").lower()
+    text = str(stock.get("text") or "").lower().replace("ё", "е")
+    flag = product.get("is_in_stock")
+    if (
+        "out-of-stock" in css
+        or "outofstock" in css
+        or "нет в наличии" in text
+        or flag is False
+    ):
+        return _STOCK_OUT
+    if "in-stock" in css or "instock" in css or flag is True:
+        return _STOCK_IN
+    return _STOCK_UNKNOWN
+
+
+def store_price_byn(prices: dict[str, Any] | None) -> float | None:
+    """Convert store API minor units (1590, minor 2) to BYN (15.90)."""
+    if not isinstance(prices, dict):
+        return None
+    try:
+        minor = int(prices.get("currency_minor_unit") or 2)
+    except (TypeError, ValueError):
+        minor = 2
+    raw = None
+    price_range = prices.get("price_range") or {}
+    if isinstance(price_range, dict):
+        raw = price_range.get("min_amount")
+    if raw in (None, ""):
+        raw = prices.get("price")
+    if raw in (None, ""):
+        return None
+    try:
+        return int(str(raw)) / (10**minor)
+    except (TypeError, ValueError):
+        return None
+
+
+def _clean_store_name(name: str) -> str:
+    text = html.unescape(name or "")
+    text = re.sub(r"<[^>]+>", " ", text)
+    return " ".join(text.split())
+
+
+def _weight_from_store_product(product: dict[str, Any]) -> int | None:
+    variations = product.get("variations") or []
+    if not isinstance(variations, list) or not variations:
+        return None
+    first = variations[0]
+    if not isinstance(first, dict):
+        return None
+    attrs = first.get("attributes") or []
+    if not isinstance(attrs, list) or not attrs or not isinstance(attrs[0], dict):
+        return None
+    match = re.search(r"(\d+)", str(attrs[0].get("value") or ""))
+    return int(match.group(1)) if match else None
+
+
+def _image_from_store_product(product: dict[str, Any]) -> str | None:
+    images = product.get("images") or []
+    if not isinstance(images, list) or not images or not isinstance(images[0], dict):
+        return None
+    return images[0].get("thumbnail") or images[0].get("src")
+
+
+def item_from_store_product(
+    product: dict[str, Any],
+    *,
+    category_url: str,
+    source_page: int,
+    today: str,
+) -> dict[str, Any]:
+    name = _clean_store_name(str(product.get("name") or ""))
+    link = product.get("permalink")
+    link_s = str(link) if link else None
+    matched_slug, confidence = _match_slug(name, link_s)
+    year_match = re.search(r"\b(20\d{2})\b", name)
+    product_id = product.get("id")
+    return {
+        "product_id": str(product_id) if product_id is not None else None,
+        "product_name": name,
+        "matched_slug": matched_slug,
+        "mapping_confidence": confidence,
+        "price_from_byn": store_price_byn(product.get("prices")),
+        "availability": availability_from_store_product(product),
+        "harvest_year": int(year_match.group(1)) if year_match else None,
+        "weight_g": _weight_from_store_product(product),
+        "category": _fallback_category_label(category_url),
+        "subcategory": None,
+        "category_url": category_url,
+        "product_url": link_s,
+        "image_url": _image_from_store_product(product),
+        "description": None,
+        "source_page": source_page,
+        "last_checked": today,
+    }
+
+
+def availability_summary(items: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {_STOCK_IN: 0, _STOCK_OUT: 0, _STOCK_UNKNOWN: 0}
+    for item in items:
+        key = str(item.get("availability") or _STOCK_UNKNOWN)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def all_items_in_stock(items: list[dict[str, Any]]) -> bool:
+    return bool(items) and all(item.get("availability") == _STOCK_IN for item in items)
 
 
 def _match_slug(
@@ -147,11 +384,35 @@ def parse_catalog(
     category_urls: tuple[str, ...] | list[str] | None = None,
 ) -> list[dict[str, Any]]:
     sess = session or requests.Session()
+    urls = tuple(category_urls) if category_urls else CATEGORY_URLS
+    try:
+        return _parse_html_catalog(
+            sess,
+            max_pages=max_pages,
+            fetch_details=fetch_details,
+            category_urls=urls,
+        )
+    except TeashopBlocked:
+        logger.warning(
+            "Category HTML returned 403; refreshing via the WooCommerce store API"
+        )
+        return parse_catalog_via_store_api(
+            sess,
+            max_pages=max_pages,
+            category_urls=urls,
+        )
+
+
+def _parse_html_catalog(
+    sess: requests.Session,
+    *,
+    max_pages: int,
+    fetch_details: bool,
+    category_urls: tuple[str, ...],
+) -> list[dict[str, Any]]:
     teas: list[dict[str, Any]] = []
     today = date.today().isoformat()
-    urls = tuple(category_urls) if category_urls else CATEGORY_URLS
-
-    for category_url in urls:
+    for category_url in category_urls:
         teas.extend(
             _parse_category(
                 sess,
@@ -161,6 +422,74 @@ def parse_catalog(
                 today=today,
             )
         )
+    return teas
+
+
+def _fetch_store_products(
+    sess: requests.Session,
+    category_id: int,
+    *,
+    max_pages: int,
+) -> list[tuple[int, dict[str, Any]]]:
+    found: list[tuple[int, dict[str, Any]]] = []
+    headers = {**HEADERS, "Accept": "application/json"}
+    for page in range(1, max_pages + 1):
+        url = (
+            f"{STORE_API_PRODUCTS}?category={category_id}&per_page=100&page={page}"
+        )
+        logger.info("Fetching store API %s", url)
+        try:
+            resp = sess.get(url, headers=headers, timeout=30)
+        except requests.RequestException as exc:
+            logger.warning("Store API failed for %s: %s", url, exc)
+            break
+        if resp.status_code == 403:
+            raise TeashopBlocked(url)
+        if resp.status_code != 200:
+            logger.warning("Store API non-200 %s for %s", resp.status_code, url)
+            break
+        try:
+            payload = resp.json()
+        except ValueError:
+            logger.warning("Store API did not return JSON for %s", url)
+            break
+        if not isinstance(payload, list) or not payload:
+            break
+        found.extend(
+            (page, item) for item in payload if isinstance(item, dict)
+        )
+        if len(payload) < 100:
+            break
+        time.sleep(1.0)
+    return found
+
+
+def parse_catalog_via_store_api(
+    session: requests.Session | None = None,
+    max_pages: int = 12,
+    category_urls: tuple[str, ...] | list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Refresh SKUs from the public WooCommerce store API (explicit stock)."""
+    sess = session or requests.Session()
+    urls = tuple(category_urls) if category_urls else CATEGORY_URLS
+    today = date.today().isoformat()
+    teas: list[dict[str, Any]] = []
+    for category_url in urls:
+        category_id = STORE_CATEGORY_IDS.get(category_url)
+        if category_id is None:
+            logger.warning("No store category id for %s", category_url)
+            continue
+        records = _fetch_store_products(sess, category_id, max_pages=max_pages)
+        teas.extend(
+            item_from_store_product(
+                product,
+                category_url=category_url,
+                source_page=page,
+                today=today,
+            )
+            for page, product in records
+        )
+        time.sleep(0.8)
     return teas
 
 
@@ -185,7 +514,7 @@ def _parse_category(
             break
         if resp.status_code == 403:
             logger.error("Got 403 from teashop.by — site may block automated clients")
-            break
+            raise TeashopBlocked(url)
         if resp.status_code != 200:
             logger.warning("Non-200 %s for %s", resp.status_code, url)
             break
@@ -244,12 +573,20 @@ def _parse_category(
             seen_on_page.add(dedupe_key)
 
             category, subcategory, description = None, None, None
+            availability = _availability(product)
             if fetch_details and link and isinstance(link, str):
                 try:
                     detail_resp = sess.get(link, headers=HEADERS, timeout=20)
                     if detail_resp.status_code == 200:
                         detail_soup = BeautifulSoup(detail_resp.text, "html.parser")
                         category, subcategory = extract_breadcrumbs(detail_soup)
+                        wrapper = detail_soup.select_one(
+                            ".single-product-wrapper"
+                        ) or detail_soup.select_one("div.product.type-product")
+                        if wrapper is not None:
+                            detail_availability = _availability(wrapper)
+                            if detail_availability != _STOCK_UNKNOWN:
+                                availability = detail_availability
                         desc_div = detail_soup.select_one(
                             "div#tab-description, #tab-description"
                         )
@@ -278,7 +615,7 @@ def _parse_category(
                     "matched_slug": matched_slug,
                     "mapping_confidence": confidence,
                     "price_from_byn": parse_price_byn(price_text),
-                    "availability": _availability(product),
+                    "availability": availability,
                     "harvest_year": harvest,
                     "weight_g": weight,
                     "category": category or fallback_label,
@@ -369,6 +706,11 @@ def main() -> None:
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
+        "--allow-all-in-stock",
+        action="store_true",
+        help="Write the catalog even if every SKU is in_stock (hand-checked)",
+    )
+    parser.add_argument(
         "--remap-existing",
         action="store_true",
         help="Fill unmatched slugs in an existing catalog JSON without fetching the site",
@@ -430,7 +772,23 @@ def main() -> None:
         fetch_details=not args.no_details,
     )
     matched = sum(1 for i in items if i.get("matched_slug"))
-    logger.info("Parsed %d items, %d with matched_slug", len(items), matched)
+    summary = availability_summary(items)
+    logger.info(
+        "Parsed %d items, %d with matched_slug, availability %s",
+        len(items),
+        matched,
+        summary,
+    )
+    if all_items_in_stock(items) and not args.allow_all_in_stock:
+        message = (
+            "Refusing to write catalog: every item is in_stock. "
+            "Stock detection saw no out-of-stock or unknown row. "
+            "Check the shop by hand, then re-run with --allow-all-in-stock."
+        )
+        if args.dry_run:
+            logger.error(message)
+        else:
+            raise SystemExit(message)
 
     if args.dry_run:
         for item in items[:5]:

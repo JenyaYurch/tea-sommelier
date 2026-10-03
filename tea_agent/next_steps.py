@@ -25,7 +25,7 @@ from google.adk.models.llm_response import LlmResponse
 from google.adk.tools import BaseTool, ToolContext
 from google.genai import types
 
-from tea_agent.shop_catalog import find_products, load_catalog
+from tea_agent.shop_catalog import find_products, is_buyable, load_catalog
 from tea_agent.slug_index import fold_text, resolve_query
 
 ACTION_LABELS: tuple[str, ...] = (
@@ -383,6 +383,8 @@ def _allowed_products(products: list[Any]) -> list[dict[str, Any]]:
         normalized["product_name"] = (
             str(normalized.get("product_name") or "").strip() or "чай"
         )
+        if not is_buyable(normalized.get("availability")):
+            continue
         out.append(normalized)
     return out
 

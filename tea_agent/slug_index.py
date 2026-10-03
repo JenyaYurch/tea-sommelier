@@ -231,6 +231,77 @@ EXTRA_ALIASES: dict[str, list[str]] = {
         "凍頂烏龍",
         "冻顶乌龙",
     ],
+    # Shop transliterations that the Free list does not spell the same way.
+    # Phrases are specific on purpose: short fragments ("хуан я", "сяо чжун",
+    # "гунтин" inside a "шу пуэр …" name) must not steal a more precise alias.
+    "shou-mei": [
+        "Шоу Мэй",
+        "Шоумэй",
+        "Брови старца",
+        "Shou Mei",
+    ],
+    "yueguang-bai": [
+        "Юэ Гуан Бай",
+        "Юе Гуан Бай",
+        "Белый лунный свет",
+        "Yue Guang Bai",
+    ],
+    "mengding-huang-ya": [
+        "Мэндин Хуан Я",
+        "Мэн Дин Хуан Я",
+        "Mengding Huang Ya",
+    ],
+    "huoshan-huang-ya": [
+        "Хо Шань Хуан Я",
+        "Хуошань Хуан Я",
+        "Хошань Хуан Я",
+        "Huoshan Huangya",
+    ],
+    "bai-lin-gongfu": [
+        "Бай Линь Гун Фу",
+        "Байлинь Гунфу",
+        "Bailin Gongfu",
+    ],
+    "qimen-hongcha": [
+        "Цимень Хун Ча",
+        "Кимун",
+        "Keemun",
+        "Qimen Hongcha",
+    ],
+    "jin-jun-mei": [
+        "Цзинь Цзюнь Мэй",
+        "Цзиньцзюньмэй",
+        "Золотые брови",
+        "Jin Jun Mei",
+    ],
+    "yin-jun-mei": [
+        "Инь Цзюнь Мэй",
+        "Серебряные брови",
+        "Yin Jun Mei",
+    ],
+    "zheng-shan-xiao-zhong": [
+        "Чжэн Шань Сяо Чжун",
+        "Чжен Шань Сяо Чжун",
+        "Лапсанг Сушонг",
+        "Лапсанг",
+        "Zheng Shan Xiao Zhong",
+        "Lapsang Souchong",
+    ],
+    "tanyang-gong-fu": [
+        "Тань Ян Гунфу",
+        "Таньян Гунфу",
+        "Tanyang Gongfu",
+    ],
+    "gongting-pu-er": [
+        "Гунтин",
+        "Дворцовый пуэр",
+        "Gong Ting Pu-erh",
+    ],
+    "xiaguan-tie-bing": [
+        "Железный блин",
+        "Сягуань Тэ Бин",
+        "Xiaguan Tie Bing",
+    ],
 }
 
 
@@ -246,7 +317,7 @@ def _data_path() -> Path:
 
 
 def fold_text(value: str) -> str:
-    text = value.lower().replace("ё", "е")
+    text = value.lower().replace("ё", "е").replace("э", "е")
     text = unicodedata.normalize("NFKD", text)
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     text = re.sub(r"[^a-z0-9а-я]+", " ", text, flags=re.IGNORECASE)
@@ -311,7 +382,15 @@ def resolve_query(query: str, limit: int) -> list[dict[str, Any]]:
             if part == needle:
                 score = max(score, 100)
             elif needle in part or part in needle:
-                score = max(score, 80 if min(len(needle), len(part)) >= 4 else 50)
+                # A 1-character folded name (英红1号 -> "1") used to score 50
+                # against every product whose name contains that digit.
+                if min(len(needle), len(part)) < 4:
+                    continue
+                if part in needle:
+                    # Longer alias wins ties: "Цзюнь Шань Инь Чжэнь" beats "Инь Чжэнь".
+                    score = max(score, 80 + min(19, len(part) // 2))
+                else:
+                    score = max(score, 80)
         if score == 0:
             tokens = set(needle.split())
             hay = set(" ".join(folded_parts).split())
