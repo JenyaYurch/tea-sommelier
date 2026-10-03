@@ -5,8 +5,8 @@ Cloud Run stays in europe-central2; the instance is created in the same region
 so the unix socket from ``--set-cloudsql-instances`` works.
 
 Usage:
-    uv run python scripts/setup_cloud_sql.py
-    uv run python scripts/setup_cloud_sql.py --execute
+    uv run python scripts/setup_cloud_sql.py --project=gen-lang-client-0393777014
+    uv run python scripts/setup_cloud_sql.py --project=gen-lang-client-0393777014 --execute
 """
 
 from __future__ import annotations

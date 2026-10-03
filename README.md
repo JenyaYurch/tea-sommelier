@@ -11,12 +11,10 @@ tea-sommelier/
 │   ├── agent.py               # Main agent logic
 │   ├── fast_api_app.py        # FastAPI Backend server
 │   └── app_utils/             # App utilities and helpers
-├── tests/                     # Unit, integration, and load tests
-├── GEMINI.md                  # AI-assisted development guide
+├── tests/                     # Unit, integration, and eval tests
+├── docs/HOW_TO.md             # Run, deploy, and status
 └── pyproject.toml             # Project dependencies
 ```
-
-> 💡 **Tip:** Use [Antigravity CLI](https://antigravity.google/) for AI-assisted development - project context is pre-configured in `GEMINI.md`.
 
 ## Requirements
 
@@ -56,7 +54,8 @@ You can also use features from the [ADK](https://adk.dev/) CLI with `uv run adk`
 | `agents-cli playground` | Launch local development environment                                                  |
 | `agents-cli lint`    | Run code quality checks                                                               |
 | `agents-cli eval`    | Evaluate agent behavior (generate, grade, analyze, and more — see `agents-cli eval --help`) |
-| `uv run pytest tests/unit tests/integration` | Run unit and integration tests                                                        || [A2A Inspector](https://github.com/a2aproject/a2a-inspector) | Launch A2A Protocol Inspector                                                        |
+| `uv run pytest tests/unit tests/integration` | Run unit and integration tests                                                        |
+| [A2A Inspector](https://github.com/a2aproject/a2a-inspector) | Launch A2A Protocol Inspector                                                        |
 
 ## 🛠️ Project Management
 
@@ -88,11 +87,13 @@ Production is two Cloud Run services (`tea-agent` + `telegram-integration`) in `
 
 ```bash
 uv run python scripts/setup_secret_manager.py
-uv run python scripts/deploy_cloud_run.py
-uv run python scripts/deploy_cloud_run.py --execute
+uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014
+uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 --execute
 ```
 
-`--execute` deploys without Memory Bank and without Cloud SQL unless `GOOGLE_CLOUD_AGENT_ENGINE_ID` or `CLOUD_SQL_INSTANCE` is already set. Default `tea-agent` gets `TEA_ALLOW_EPHEMERAL_SESSIONS=true` and `--clear-cloudsql-instances`. Taste profiles live in memory and reset on scale-to-zero or a new revision. Optional TEA-14 persistence: `uv run python scripts/setup_cloud_sql.py --execute`, set `CLOUD_SQL_INSTANCE`, then redeploy. Cloud Run still refuses sqlite/in-memory when that flag is unset. Local polling defaults to `SESSION_SERVICE_URI=sqlite+aiosqlite:///./sessions.db`. Do not run local polling and the webhook at the same time (Telegram allows one getUpdates client).
+Pass `--project` on deploy. A leftover `GOOGLE_CLOUD_PROJECT` in the shell or `.env` (for example `teabot-local-eval`) wins over the billed project. `setup_secret_manager.py` has no `--project` flag and uses that same override, then the default `gen-lang-client-0393777014`.
+
+`--execute` deploys without Memory Bank and without Cloud SQL unless `GOOGLE_CLOUD_AGENT_ENGINE_ID` or `CLOUD_SQL_INSTANCE` is already set. Default `tea-agent` gets `TEA_ALLOW_EPHEMERAL_SESSIONS=true` and `--clear-cloudsql-instances`. Taste profiles live in memory and reset on scale-to-zero or a new revision. Optional TEA-14 persistence: `uv run python scripts/setup_cloud_sql.py --project=gen-lang-client-0393777014 --execute`, set `CLOUD_SQL_INSTANCE`, then redeploy. Cloud Run still refuses sqlite/in-memory when that flag is unset. Local polling defaults to `SESSION_SERVICE_URI=sqlite+aiosqlite:///./sessions.db`. Do not run local polling and the webhook at the same time (Telegram allows one getUpdates client).
 
 ## Deployment
 
@@ -100,7 +101,7 @@ Week 3 uses the two-service Cloud Run script above, not `agents-cli deploy`. To 
 
 ## Observability
 
-Built-in telemetry exports to Cloud Trace, BigQuery, and Cloud Logging.
+When `OTEL_TO_CLOUD` is not `false`, the agent exports OpenTelemetry to Cloud Trace, Cloud Monitoring, and Cloud Logging.
 
 ## A2A Inspector
 

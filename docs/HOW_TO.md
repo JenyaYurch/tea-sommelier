@@ -89,6 +89,8 @@ Reads `TELEGRAM_BOT_TOKEN` and `GEMINI_API_KEY` / `GOOGLE_API_KEY` from local `.
 uv run python scripts/setup_secret_manager.py
 ```
 
+This script has no `--project` flag. `GOOGLE_CLOUD_PROJECT` in the shell or `.env` overrides the default `gen-lang-client-0393777014`.
+
 ---
 
 ## 3. Run locally
@@ -240,7 +242,7 @@ https://tea-agent-6zy2uwhjla-lm.a.run.app
 https://telegram-integration-6zy2uwhjla-lm.a.run.app
 ```
 
-HTTP check (unauthenticated by design so Telegram can call the agent):
+HTTP check (`tea-agent` is deployed `--allow-unauthenticated`; Telegram calls `telegram-integration`, and only that service calls `tea-agent` via `ADK_SERVER_URL`):
 
 ```bash
 curl -s -o NUL -w "%{http_code}" https://tea-agent-6zy2uwhjla-lm.a.run.app/apps/tea_agent/users/tg-warmup/sessions/tg-sess-warmup
@@ -263,7 +265,7 @@ gcloud run services logs read tea-agent --project=gen-lang-client-0393777014 --r
 gcloud run services logs read telegram-integration --project=gen-lang-client-0393777014 --region=europe-central2 --limit=80
 ```
 
-Console: Cloud Run → service → Logs. Cloud Trace / Cloud Logging are enabled on the agent image when `OTEL_TO_CLOUD` is not `false`.
+Console: Cloud Run → service → Logs. Cloud Trace, Cloud Monitoring, and Cloud Logging are enabled on the agent image when `OTEL_TO_CLOUD` is not `false`.
 
 ### Cloud SQL / Memory Bank (should be empty on the cheap path)
 
@@ -424,8 +426,8 @@ Without `TEA_ALLOW_EPHEMERAL_SESSIONS`, Cloud Run **refuses** sqlite/in-memory s
 Agent Engine Memory Bank is not hosted in `europe-central2`; setup defaults to location `eu`.
 
 ```bash
-uv run python scripts/setup_memory_bank.py
-uv run python scripts/setup_memory_bank.py --execute
+uv run python scripts/setup_memory_bank.py --project=gen-lang-client-0393777014
+uv run python scripts/setup_memory_bank.py --project=gen-lang-client-0393777014 --execute
 ```
 
 Then set `GOOGLE_CLOUD_AGENT_ENGINE_ID` (and usually `GOOGLE_CLOUD_AGENT_ENGINE_LOCATION=eu`) and redeploy. Local/dev recall stays in-memory if the id is unset.
@@ -478,4 +480,4 @@ A2A: the FastAPI app exposes A2A routes. Inspector: [A2A Inspector](https://gith
 - Never commit `.env`, `credentials.json`, or secret values.
 - `--execute` on deploy / Cloud SQL / Memory Bank is explicit approval. Dry-run first.
 - Do not change `MODEL` in `tea_agent/agent.py` unless you intend to.
-- `tea-agent` is `--allow-unauthenticated` so Telegram can call it. Treat the URL as public.
+- Telegram calls `telegram-integration` (webhook). Only that service calls `tea-agent` (`ADK_SERVER_URL`). `tea-agent` is still deployed `--allow-unauthenticated`, so treat its URL as public. Locking that down is TEA-34; do not change the deploy flag from this guide.

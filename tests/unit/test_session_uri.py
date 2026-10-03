@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 
 import pytest
-
 from sqlalchemy.engine import make_url
 
 from tea_agent.app_utils.session_uri import (
@@ -19,6 +18,7 @@ from tea_agent.app_utils.session_uri import (
     postgres_unix_socket_path,
     postgres_unix_uri,
     resolve_session_service_uri,
+    session_profile_durability,
 )
 
 
@@ -164,6 +164,48 @@ def test_postgres_unix_socket_path_appends_pg_suffix() -> None:
     )
     assert postgres_unix_socket_path(LOCAL_SQLITE_URI) is None
     assert postgres_unix_socket_path("postgresql+asyncpg://u:p@127.0.0.1/db") is None
+
+
+def _clear_backend_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "SESSION_SERVICE_URI",
+        "CLOUD_SQL_INSTANCE",
+        "SESSION_DB_PASSWORD",
+        "GOOGLE_CLOUD_AGENT_ENGINE_ID",
+        "K_SERVICE",
+        "TEA_ALLOW_EPHEMERAL_SESSIONS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_profile_durability_is_memory_without_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_backend_env(monkeypatch)
+    assert session_profile_durability() == "memory"
+    monkeypatch.setenv("K_SERVICE", "tea-agent")
+    monkeypatch.setenv("TEA_ALLOW_EPHEMERAL_SESSIONS", "true")
+    assert session_profile_durability() == "memory"
+
+
+def test_profile_durability_local_sqlite_and_cloud_run_disk(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_backend_env(monkeypatch)
+    monkeypatch.setenv("SESSION_SERVICE_URI", LOCAL_SQLITE_URI)
+    monkeypatch.setenv("GOOGLE_CLOUD_AGENT_ENGINE_ID", "123")
+    assert session_profile_durability() == "local_file"
+    monkeypatch.setenv("K_SERVICE", "tea-agent")
+    assert session_profile_durability() == "memory"
+
+
+def test_profile_durability_postgres_and_agent_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_backend_env(monkeypatch)
+    monkeypatch.setenv("CLOUD_SQL_INSTANCE", "demo:europe-central2:tea-sessions")
+    monkeypatch.setenv("SESSION_DB_PASSWORD", "secret")
+    monkeypatch.setenv("K_SERVICE", "tea-agent")
+    assert session_profile_durability() == "persistent"
+    monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
+    monkeypatch.delenv("SESSION_DB_PASSWORD", raising=False)
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.setenv("GOOGLE_CLOUD_AGENT_ENGINE_ID", "123")
+    assert session_profile_durability() == "persistent"
 
 
 def test_sqlite_uri_is_ephemeral_postgres_and_agent_engine_are_not() -> None:

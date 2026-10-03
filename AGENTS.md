@@ -24,10 +24,17 @@ Start with 1-2 eval cases, run `agents-cli eval generate`, then `agents-cli eval
 Run `uv run pytest tests/unit tests/integration`. Fix issues until all tests pass.
 
 ### Phase 5: Deploy to Dev
-**Requires explicit human approval.** Run `agents-cli deploy` only after user confirms. See the **Deployment Guide** for details.
+**Requires explicit human approval.** Dry-run first, then deploy only after the user confirms:
+
+```bash
+uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014
+uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 --execute
+```
+
+That script deploys `tea-agent` and `telegram-integration`. Do not use `agents-cli deploy`. See [docs/HOW_TO.md](docs/HOW_TO.md).
 
 ### Phase 6: Production Deployment
-Ask the user: Option A (simple single-project) or Option B (full CI/CD pipeline with `agents-cli infra cicd`).
+Production is the same Cloud Run path as Phase 5 (`scripts/deploy_cloud_run.py` with `--project` and `--execute` after approval). CI/CD and Terraform are not set up. Add them later with `agents-cli scaffold enhance` only if the user asks.
 
 ## Development Commands
 
@@ -43,9 +50,10 @@ Ask the user: Option A (simple single-project) or Option B (full CI/CD pipeline 
 | `agents-cli eval metric list` | List built-in metrics available in the SDK |
 | `agents-cli eval optimize` | Auto-tune agent prompts using eval data |
 | `agents-cli lint` | Check code quality |
-| `agents-cli infra single-project` | Set up project infrastructure (Terraform) |
-| `agents-cli deploy` | Deploy to dev |
-| `agents-cli scaffold enhance` | Add deployment target or CI/CD to project |
+| `agents-cli infra single-project` | Set up project infrastructure (Terraform); not the current deploy |
+| `uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014` | Dry-run Cloud Run deploy (`tea-agent` + `telegram-integration`) |
+| `uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 --execute` | Deploy after explicit approval |
+| `agents-cli scaffold enhance` | Add deployment target or CI/CD later, if the user asks |
 | `agents-cli scaffold upgrade` | Upgrade project to latest version |
 
 ---

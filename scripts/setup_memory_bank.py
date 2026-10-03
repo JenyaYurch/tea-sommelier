@@ -5,8 +5,8 @@ Cloud Run stays in europe-central2; Memory Bank defaults to the EU
 multi-region (`eu`) because europe-central2 does not host Memory Bank.
 
 Usage:
-    uv run python scripts/setup_memory_bank.py
-    uv run python scripts/setup_memory_bank.py --execute
+    uv run python scripts/setup_memory_bank.py --project=gen-lang-client-0393777014
+    uv run python scripts/setup_memory_bank.py --project=gen-lang-client-0393777014 --execute
 """
 
 from __future__ import annotations
