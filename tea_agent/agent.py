@@ -19,14 +19,18 @@ from google.adk.agents import Agent
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.apps import App
 from google.adk.models import Gemini
-from google.adk.tools.preload_memory_tool import PreloadMemoryTool
 from google.adk.utils.instructions_utils import inject_session_state
 from google.genai import types
 
 from tea_agent.app_utils.session_uri import session_profile_durability
 from tea_agent.brewing_agent import brewing_agent
-from tea_agent.memory import generate_memories_callback
 from tea_agent.location import save_user_location
+from tea_agent.memory import (
+    log_memory_bank_status,
+    memory_after_agent_callback,
+    memory_bank_enabled,
+    memory_tools,
+)
 from tea_agent.local_shops import find_local_shops
 from tea_agent.next_steps import attach_next_steps_to_response, collect_turn_hits
 from tea_agent.onboarding_agent import onboarding_agent
@@ -60,6 +64,21 @@ _PROFILE_PERSISTENCE_LINES = {
     ),
 }
 _PROFILE_LINE_MARK = "___PROFILE_PERSISTENCE_LINE___"
+_MEMORY_LINE_MARK = "___MEMORY_BANK_LINE___"
+_MEMORY_BANK_ON = (
+    "Если в контексте есть факты из прошлых сессий (вкус, сосуд, нелюбимая горечь, "
+    "любимые сорта) — учитывай их. Не выдумывай предпочтения, которых нет в профиле "
+    "сессии или в этих фактах. Цены, терруар и заварка — только из tools, не из памяти. "
+    "Медицинские диагнозы и обещания не запоминай и не используй. Если пользователь "
+    "просит забыть — не опирайся на старые предпочтения в этом ответе."
+)
+_MEMORY_BANK_OFF = (
+    "Долгосрочной памяти между сессиями нет. Не ищи факты из прошлых сессий и не "
+    "выдумывай предпочтения, которых нет в профиле сессии выше. Цены, терруар и "
+    "заварка — только из tools, не из памяти модели. Медицинские диагнозы и обещания "
+    "не запоминай и не используй. Если пользователь просит забыть — не опирайся на "
+    "старые предпочтения в этом ответе."
+)
 
 INSTRUCTION_TEMPLATE = """
 Ты — сомелье по китайскому чаю витрины: зелёный, белый, жёлтый, красный (black tea),
@@ -121,7 +140,7 @@ ___PROFILE_PERSISTENCE_LINE___
 find_local_shops: скажи класс (зелёный, красный, белый, жёлтый, улун, пуэр), не «у них есть именно этот сорт». Цен на карточках справочника нет — не называй и не подставляй price_display. URL только из shops[].url и shops[].website; блок «Где рядом» собирается из tool, не вставляй другие ссылки. status=not_found — скажи, что не нашлось, и ничего не выдумывай. status=error — справочник недоступен; рекомендацию чая и витрину не отменяй.
 Вкус/терруар — только tea.support; цена витрины — только price_display в блоке «### На витрине»; магазины рядом — только find_local_shops. Не смешивай.
 После любых tool-вызовов всегда дай законченный ответ пользователю на русском. Не заканчивай ход пустым сообщением.
-Если в контексте есть факты из прошлых сессий (вкус, сосуд, нелюбимая горечь, любимые сорта) — учитывай их. Не выдумывай предпочтения, которых нет в профиле сессии или в этих фактах. Цены, терруар и заварка — только из tools, не из памяти. Медицинские диагнозы и обещания не запоминай и не используй. Если пользователь просит забыть — не опирайся на старые предпочтения в этом ответе.
+___MEMORY_BANK_LINE___
 После ровно 3 рекомендаций и после витрины/подарка в конце ответа добавь блок:
 ### Что дальше
 [мягче] [дешевле] [без горечи] [подарок] [подробнее] [магазины рядом]
@@ -141,50 +160,70 @@ def profile_persistence_line() -> str:
     return _PROFILE_PERSISTENCE_LINES[session_profile_durability()]
 
 
+def memory_bank_line() -> str:
+    """Past-session facts only when Memory Bank hooks are actually attached."""
+    if memory_bank_enabled():
+        return _MEMORY_BANK_ON
+    return _MEMORY_BANK_OFF
+
+
 def instruction_text() -> str:
-    """Instruction with placeholders intact and a backend-specific profile line."""
-    line = profile_persistence_line()
+    """Instruction with placeholders intact and backend-specific lines."""
     if _PROFILE_LINE_MARK not in INSTRUCTION_TEMPLATE:
         raise RuntimeError("profile persistence marker missing from instruction")
-    return INSTRUCTION_TEMPLATE.replace(_PROFILE_LINE_MARK, line, 1)
+    if _MEMORY_LINE_MARK not in INSTRUCTION_TEMPLATE:
+        raise RuntimeError("memory bank marker missing from instruction")
+    text = INSTRUCTION_TEMPLATE.replace(
+        _PROFILE_LINE_MARK, profile_persistence_line(), 1
+    )
+    return text.replace(_MEMORY_LINE_MARK, memory_bank_line(), 1)
 
 
 async def build_instruction(readonly_context: ReadonlyContext) -> str:
     """Fill session-state placeholders after choosing the persistence sentence.
 
     A callable instruction bypasses ADK's own injection, so this calls
-    ``inject_session_state`` itself. The sentence is chosen per turn so it
-    matches sqlite applied after import (local Telegram polling).
+    ``inject_session_state`` itself. The profile sentence and the Memory Bank
+    sentence are chosen per turn so they match the process environment
+    (sqlite applied after import, engine id present or not).
     """
     return await inject_session_state(instruction_text(), readonly_context)
 
 
-root_agent = Agent(
-    name="tea_sommelier",
-    model=Gemini(
-        model=MODEL,
-        retry_options=types.HttpRetryOptions(attempts=3),
-    ),
-    instruction=build_instruction,
-    description="Sommelier for Chinese tea: green, white, yellow, red, puerh, GABA.",
-    tools=[
-        resolve_tea,
-        search_teas,
-        get_tea_card,
-        similar_teas,
-        compare_teas,
-        find_in_shop,
-        find_local_shops,
-        save_user_location,
-        save_taste_profile,
-        ask_sommelier,
-        PreloadMemoryTool(),
-    ],
-    sub_agents=[onboarding_agent, brewing_agent],
-    after_tool_callback=collect_turn_hits,
-    after_model_callback=attach_next_steps_to_response,
-    after_agent_callback=generate_memories_callback,
-)
+def build_root_agent() -> Agent:
+    """Root sommelier. Memory Bank tools follow ``GOOGLE_CLOUD_AGENT_ENGINE_ID``."""
+    agent = Agent(
+        name="tea_sommelier",
+        model=Gemini(
+            model=MODEL,
+            retry_options=types.HttpRetryOptions(attempts=3),
+        ),
+        instruction=build_instruction,
+        description="Sommelier for Chinese tea: green, white, yellow, red, puerh, GABA.",
+        tools=[
+            resolve_tea,
+            search_teas,
+            get_tea_card,
+            similar_teas,
+            compare_teas,
+            find_in_shop,
+            find_local_shops,
+            save_user_location,
+            save_taste_profile,
+            ask_sommelier,
+            *memory_tools(),
+        ],
+        # ADK allows each sub-agent on only one parent. Copies keep the singletons free.
+        sub_agents=[onboarding_agent.clone(), brewing_agent.clone()],
+        after_tool_callback=collect_turn_hits,
+        after_model_callback=attach_next_steps_to_response,
+        after_agent_callback=memory_after_agent_callback(),
+    )
+    log_memory_bank_status()
+    return agent
+
+
+root_agent = build_root_agent()
 
 app = App(
     root_agent=root_agent,

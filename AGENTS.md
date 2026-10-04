@@ -67,3 +67,4 @@ Production is the same Cloud Run path as Phase 5 (`scripts/deploy_cloud_run.py` 
 - **Run Python with `uv`**: `uv run python script.py`. Run `agents-cli install` first.
 - **Stop on repeated errors**: If the same error appears 3+ times, fix the root cause instead of retrying.
 - **Terraform conflicts** (Error 409): Use `terraform import` instead of retrying creation.
+- **Memory Bank**: Attach `PreloadMemoryTool` and `generate_memories_callback` only when `GOOGLE_CLOUD_AGENT_ENGINE_ID` is set (`tea_agent.memory.memory_bank_enabled`, the same check as `agent_engine_id_from_env`). When that id is unset, the prompt must not tell the model it has facts from past sessions. Taste profile, `/city`, and `/currency` are session state, not Memory Bank.

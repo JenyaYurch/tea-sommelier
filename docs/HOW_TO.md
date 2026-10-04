@@ -18,7 +18,7 @@ Two ways to talk to the same agent:
 
 Telegram allows **one** getUpdates client. Do not run local polling while the Cloud Run webhook is active.
 
-**Default production (cheap):** Cloud Run, AI Studio Gemini key, **no Cloud SQL**, **no Memory Bank**. Taste profiles live in the memory of one `tea-agent` instance (`--max-instances=1`, `--min-instances=1`). Idle time does not wipe them. A new revision still does. Set `TEA_AGENT_MIN_INSTANCES=0` before deploy only if you accept scale-to-zero.
+**Default production (cheap):** Cloud Run, AI Studio Gemini key, **no Cloud SQL**, **no Memory Bank**. `PreloadMemoryTool` and `generate_memories_callback` attach only when `GOOGLE_CLOUD_AGENT_ENGINE_ID` is set. Taste profiles live in the memory of one `tea-agent` instance (`--max-instances=1`, `--min-instances=1`). Idle time does not wipe them. A new revision still does. Set `TEA_AGENT_MIN_INSTANCES=0` before deploy only if you accept scale-to-zero. City (`/city`) and currency (`/currency`) are the same session state, not Memory Bank.
 
 **Who can call `tea-agent`:** only `telegram-integration`. The Cloud Run proxy still allows unauthenticated TCP so `/health` stays open, and the app returns **401** on `/run`, session routes, and the dev UI unless the request sends `X-Tea-Agent-Token`. The token is Secret Manager secret `TEA_AGENT_AUTH_SECRET`, mounted on both services. The ADK dev UI is off in prod (`TEA_AGENT_DEV_UI=false`) and on when you run uvicorn locally with that flag unset. Telegram itself calls `telegram-integration`, never `tea-agent`. Do not publish the `tea-agent` URL.
 
@@ -72,7 +72,7 @@ Optional:
 | `GOOGLE_CLOUD_PROJECT` | Used by some eval tooling; a placeholder like `teabot-local-eval` is enough locally |
 | `SESSION_SERVICE_URI` | Local sessions; polling defaults to sqlite `./sessions.db` |
 | `CLOUD_SQL_INSTANCE` | **Do not set** unless you want to pay for Postgres |
-| `GOOGLE_CLOUD_AGENT_ENGINE_ID` | **Do not set** unless you want Memory Bank |
+| `GOOGLE_CLOUD_AGENT_ENGINE_ID` | **Do not set** unless you want Memory Bank. This existing variable is the only switch for preload and memory generation |
 | `TEA_AGENT_AUTH_SECRET` | Leave unset locally. Set only to exercise the prod header check |
 | `TEA_AGENT_MIN_INSTANCES` | Deploy only. Default `1`. `0` allows scale-to-zero |
 | `TELEGRAM_ALLOWED_USER_IDS` | Closed-beta allowlist. See [Closed beta](#61-closed-beta-allowlist-and-rate-limit) |
@@ -328,7 +328,7 @@ gcloud run services logs read tea-agent --project=gen-lang-client-0393777014 --r
 gcloud run services logs read telegram-integration --project=gen-lang-client-0393777014 --region=europe-central2 --limit=80
 ```
 
-Console: Cloud Run → service → Logs. Cloud Trace, Cloud Monitoring, and Cloud Logging are enabled on the agent image when `OTEL_TO_CLOUD` is not `false`.
+Console: Cloud Run → service → Logs. Cloud Trace, Cloud Monitoring, and Cloud Logging are enabled on the agent image when `OTEL_TO_CLOUD` is not `false`. After tea-agent starts, one line from `tea_agent.memory` says `Memory Bank: off` or `Memory Bank: on`.
 
 Beta feedback (👍 / 👎 and `/feedback`) is a structured Cloud Logging record on `tea-agent`, not the in-memory chat session. Query it with [§6.2](#62-in-chat-feedback).
 
@@ -346,7 +346,7 @@ gcloud sql instances delete tea-sessions --project=gen-lang-client-0393777014
 
 That is destructive. Detaching SQL from Cloud Run (`--clear-cloudsql-instances`) does **not** stop instance billing.
 
-Memory Bank: if `GOOGLE_CLOUD_AGENT_ENGINE_ID` is absent from tea-agent env, Memory Bank is off.
+Memory Bank: if `GOOGLE_CLOUD_AGENT_ENGINE_ID` is absent from tea-agent env, Memory Bank is off. The process logs that once (`Memory Bank: off` or `Memory Bank: on`). With it off, a turn does not preload memories or call `add_session_to_memory`.
 
 ### Secrets exist (names only)
 
@@ -767,7 +767,11 @@ uv run python scripts/setup_memory_bank.py --project=gen-lang-client-0393777014
 uv run python scripts/setup_memory_bank.py --project=gen-lang-client-0393777014 --execute
 ```
 
-Then set `GOOGLE_CLOUD_AGENT_ENGINE_ID` (and usually `GOOGLE_CLOUD_AGENT_ENGINE_LOCATION=eu`) and redeploy. Local/dev recall stays in-memory if the id is unset.
+Then set `GOOGLE_CLOUD_AGENT_ENGINE_ID` (and usually `GOOGLE_CLOUD_AGENT_ENGINE_LOCATION=eu`) and redeploy. No new environment variables: that id is the switch. `PreloadMemoryTool` and `generate_memories_callback` attach on the root agent only when it is set (sub-agents do not carry them). When it is unset, those hooks are absent, a turn does not search or write memories, and the prompt does not tell the model it has facts from past sessions. Taste profile, `/city`, and `/currency` stay in session state.
+
+Startup logs one line (`tea_agent.memory`): `Memory Bank: off (GOOGLE_CLOUD_AGENT_ENGINE_ID unset)` or `Memory Bank: on (GOOGLE_CLOUD_AGENT_ENGINE_ID is set)`.
+
+To confirm per-turn prompt tokens dropped on the cheap path, send two short messages in one Telegram chat after the new revision. In Cloud Trace, open the second turn's span `generate_content <TEA_AGENT_MODEL>` (today `generate_content gemini-3.1-flash-lite`) and read `gen_ai.usage.input_tokens`. Before this gate, `PreloadMemoryTool` inserted a `<PAST_CONVERSATIONS>` user turn copied from the same session, so that attribute counted the chat twice. After, the request has no `PAST_CONVERSATIONS` (also visible on `gen_ai.input.messages` when the trace keeps content). There is no `execute_tool preload_memory` span in either revision: ADK runs this tool while building the model request, not as a function call. The parent span `invoke_agent tea_sommelier` carries the same token totals when experimental telemetry is on. A local trace from `agents-cli eval generate` should likewise contain neither `PAST_CONVERSATIONS` nor `preload_memory` when the engine id is unset.
 
 ---
 

@@ -169,7 +169,12 @@ def _agent_engine_location() -> str | None:
 
 @functools.cache
 def get_memory_service():
-    """Process-wide memory service: Memory Bank when an Agent Engine is set."""
+    """Process-wide memory service: Memory Bank when an Agent Engine is set.
+
+    The in-memory fallback stays registered so the runner can start. Per-turn
+    preload and generation are attached only from ``tea_agent.memory`` when
+    ``GOOGLE_CLOUD_AGENT_ENGINE_ID`` is set.
+    """
     if uri := os.environ.get("MEMORY_SERVICE_URI"):
         return create_memory_service_from_options(
             base_dir=_AGENT_DIR, memory_service_uri=uri
