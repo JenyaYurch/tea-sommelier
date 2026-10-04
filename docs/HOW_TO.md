@@ -757,6 +757,8 @@ The user has no location until they say it. The bot asks for a city once and sto
 
 The next-step chip «магазины рядом» is separate from «Купить». It calls the model. Only URLs returned by `find_local_shops` are shown.
 
+A successful answer is also kept on the session as `local_shops_last`, with `local_shops_saved` set to `yes`. Those keys are not `temp:`, so they last for the rest of this in-memory session. A later message that asks about shops or links, or that names those shops, gets the same `### Где рядом` lines again (name, place, Карточка, Сайт) even when the model does not call the tool. The model is instructed not to write a second list. `/city` and `save_user_location` clear the stored list when the city changes. `not_found` and `error` stay one line and do not invent links. No new environment variable.
+
 No new environment variable. Deploy is still:
 
 ```bash

@@ -12,6 +12,8 @@ Canonical block at the end of a recommendation reply:
 «Купить» is a markdown link to a teashop.by URL from the local catalog — never invented.
 «магазины рядом» is a separate chip. Shop card and website links come only from
 find_local_shops and are rendered under «### Где рядом», not as «Купить».
+A successful payload is also stored on the session (``local_shops_last``) so a
+later turn can rebuild that same block when the tool does not run again.
 «### На витрине» is the teashop.by price, built from price_display. It is not
 the price of a b2btea shop.
 """
@@ -31,6 +33,7 @@ from google.genai import types
 
 from tea_agent.currency import annotate_product, currency_from_state
 from tea_agent.fx_rates import current_fx_quote
+from tea_agent.location import LOCAL_SHOPS_LAST_KEY, LOCAL_SHOPS_SAVED_KEY
 from tea_agent.shop_catalog import find_products, is_buyable, load_catalog
 from tea_agent.slug_index import fold_text, resolve_query
 
@@ -499,23 +502,167 @@ def _strip_url_set(text: str, urls: set[str]) -> str:
     return re.sub(r"https?://[^\s)>\]]+", _replace_bare, cleaned)
 
 
+_SHOP_ASK = re.compile(r"магазин|ссылк|где\s+рядом|b2btea", re.IGNORECASE)
+_CARD_SITE = re.compile(
+    r"карточк|официальн|(?<![0-9a-zа-яё])сайт(?![0-9a-zа-яё])",
+    re.IGNORECASE,
+)
+_SHOP_BULLET = re.compile(r"^\s*(?:\d+[.)]|[-*•])\s+(.*)$")
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+
+def _stored_shop_names(payload: dict[str, Any] | None) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    names: list[str] = []
+    for shop in payload.get("shops") or []:
+        if not isinstance(shop, dict):
+            continue
+        folded = fold_text(str(shop.get("name") or ""))
+        if len(folded) >= 3 and folded not in names:
+            names.append(folded)
+    return names
+
+
+def _shop_name_hits(text: str, names: list[str]) -> int:
+    folded = fold_text(text)
+    hits = 0
+    for name in names:
+        if re.search(
+            rf"(?<![0-9a-zа-я]){re.escape(name)}(?![0-9a-zа-я])",
+            folded,
+        ):
+            hits += 1
+    return hits
+
+
+def _is_shop_list_fragment(text: str, names: list[str]) -> bool:
+    hits = _shop_name_hits(text, names)
+    if hits >= 2:
+        return True
+    return hits >= 1 and _CARD_SITE.search(text) is not None
+
+
+def _line_is_only_a_shop_name(line: str, names: list[str]) -> bool:
+    match = _SHOP_BULLET.match(line)
+    raw = match.group(1) if match else line
+    return fold_text(raw) in names
+
+
+def _strip_free_text_shop_list(text: str, payload: dict[str, Any] | None) -> str:
+    """Drop the model's own shop list so the code block is the only one.
+
+    A line or sentence goes when it names two saved shops, or one saved shop
+    together with card/site wording («карточка магазина», «официальный сайт»).
+    A line that is only a shop name goes too. One other sentence may stay.
+    """
+    names = _stored_shop_names(payload)
+    if not names:
+        return text
+    kept_lines: list[str] = []
+    for line in text.splitlines():
+        if _line_is_only_a_shop_name(line, names):
+            continue
+        if not _is_shop_list_fragment(line, names):
+            kept_lines.append(line)
+            continue
+        sentences = [
+            part.strip() for part in _SENTENCE_SPLIT.split(line) if part.strip()
+        ]
+        kept = [part for part in sentences if not _is_shop_list_fragment(part, names)]
+        if kept:
+            kept_lines.append(" ".join(kept))
+    cleaned = "\n".join(kept_lines)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _should_restore_local_shops(
+    reply: str, stored: dict[str, Any] | None, user_text: str
+) -> bool:
+    if not isinstance(stored, dict) or stored.get("status") != "success":
+        return False
+    if not format_local_shops_section(stored):
+        return False
+    if _SHOP_ASK.search(user_text):
+        return True
+    return _shop_name_hits(reply, _stored_shop_names(stored)) >= 1
+
+
+def _is_success_shop_payload(payload: dict[str, Any] | None) -> bool:
+    return isinstance(payload, dict) and payload.get("status") == "success"
+
+
+def _local_shops_for_reply(
+    reply: str,
+    turn: dict[str, Any] | None,
+    stored: dict[str, Any] | None,
+    user_text: str | None,
+) -> dict[str, Any] | None:
+    """This turn's tool payload wins, including not_found and error.
+
+    Stored shops are used only when the tool did not run and the reply names
+    those shops, or the user asked about shops or links.
+    """
+    if isinstance(turn, dict):
+        return turn
+    if _should_restore_local_shops(reply, stored, user_text or ""):
+        return stored
+    return None
+
+
+def stored_local_shops_match_session(stored: dict[str, Any], state: Any) -> bool:
+    """False when the saved list belongs to a different city than the session."""
+    if not isinstance(stored, dict) or stored.get("status") != "success":
+        return False
+    session_city = str(state.get("city") or state.get("user:city") or "").strip()
+    session_country = str(
+        state.get("country") or state.get("user:country") or ""
+    ).strip()
+    stored_city = str(stored.get("city") or "").strip()
+    stored_country = str(stored.get("country") or "").strip()
+    if stored_city and not session_city:
+        return False
+    if stored_city and session_city and fold_text(stored_city) != fold_text(session_city):
+        return False
+    if (
+        stored_country
+        and session_country
+        and fold_text(stored_country) != fold_text(session_country)
+    ):
+        return False
+    return True
+
+
 def ensure_next_steps(
     text: str,
     products: list[dict[str, Any]] | None = None,
     local_shops: dict[str, Any] | None = None,
     currency: str | None = None,
+    *,
+    stored_shops: dict[str, Any] | None = None,
+    user_text: str | None = None,
 ) -> str:
     cleaned = remove_vitrine_price_section(remove_local_shops_section(text))
+    section_payload = _local_shops_for_reply(
+        text, local_shops, stored_shops, user_text
+    )
+    section = format_local_shops_section(section_payload)
+    # Drop the model's shop list before tea names are read, so "1. Teasome"
+    # is not treated as a recommended cultivar.
+    if _is_success_shop_payload(section_payload) and section:
+        cleaned = _strip_free_text_shop_list(cleaned, section_payload)
     selected = fill_price_displays(
         products_for_reply(cleaned, products), currency
     )
-    section = format_local_shops_section(local_shops)
     price_section = format_vitrine_price_section(selected)
     if not should_attach_next_steps(cleaned, selected) and not section and not price_section:
         return text
     body = _strip_invented_shop_links(strip_next_steps_block(cleaned))
+    if _is_success_shop_payload(section_payload) and section:
+        body = _strip_free_text_shop_list(body, section_payload)
     if section:
-        body = _strip_url_set(body, _local_shop_urls(local_shops)).strip()
+        body = _strip_url_set(body, _local_shop_urls(section_payload)).strip()
     if selected:
         body = strip_model_shop_prices(body)
     parts = [body]
@@ -580,7 +727,12 @@ def collect_shop_hits(
 def collect_local_shop_hits(
     tool: BaseTool, args: dict, tool_context: ToolContext, tool_response: dict
 ) -> dict | None:
-    """Remember find_local_shops hits so the reply can only show those URLs."""
+    """Remember find_local_shops hits so the reply can only show those URLs.
+
+    ``temp:local_shops_turn`` is this invocation. A successful list is also
+    copied to ``local_shops_last`` for a later turn that does not call the tool.
+    ``not_found`` and ``error`` do not replace that saved list.
+    """
     del args
     if getattr(tool, "name", "") != "find_local_shops":
         return None
@@ -606,12 +758,21 @@ def collect_local_shop_hits(
                 "tea_class": item.get("tea_class") or "",
             }
         )
-    tool_context.state[LOCAL_SHOPS_KEY] = {
+    record = {
         "status": tool_response.get("status"),
         "class_label_ru": tool_response.get("class_label_ru") or "",
         "tea_class": tool_response.get("tea_class") or "",
+        "city": tool_response.get("city") or "",
+        "country": tool_response.get("country") or "",
         "shops": shops[:3],
     }
+    tool_context.state[LOCAL_SHOPS_KEY] = record
+    if record["status"] == "success" and record["shops"]:
+        tool_context.state[LOCAL_SHOPS_LAST_KEY] = {
+            **record,
+            "shops": list(record["shops"]),
+        }
+        tool_context.state[LOCAL_SHOPS_SAVED_KEY] = "yes"
     return None
 
 
@@ -643,11 +804,18 @@ def attach_next_steps_to_response(
     local_shops = callback_context.state.get(LOCAL_SHOPS_KEY)
     if not isinstance(local_shops, dict):
         local_shops = None
+    stored = callback_context.state.get(LOCAL_SHOPS_LAST_KEY)
+    if not isinstance(stored, dict) or not stored_local_shops_match_session(
+        stored, callback_context.state
+    ):
+        stored = None
     updated = ensure_next_steps(
         original,
         products,
         local_shops=local_shops,
         currency=currency_from_state(callback_context.state),
+        stored_shops=stored,
+        user_text=_callback_user_text(callback_context),
     )
     if updated == original:
         return None
@@ -663,6 +831,22 @@ def attach_next_steps_to_response(
     return llm_response.model_copy(
         update={"content": types.Content(role=content.role or "model", parts=new_parts)}
     )
+
+
+def _callback_user_text(callback_context: Any) -> str:
+    try:
+        content = getattr(callback_context, "user_content", None)
+    except Exception:
+        return ""
+    if content is None:
+        return ""
+    parts = getattr(content, "parts", None) or []
+    chunks: list[str] = []
+    for part in parts:
+        text = getattr(part, "text", None)
+        if text:
+            chunks.append(text)
+    return "".join(chunks)
 
 
 def _buy_markdown_lines(products: list[dict[str, Any]]) -> list[str]:

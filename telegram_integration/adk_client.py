@@ -335,6 +335,28 @@ class AdkHttpClient:
         if response.status_code not in {200, 201}:
             _raise_for_status(response.status_code, response.text, scope="session")
 
+    async def get_session_state(self, user_id: str, session_id: str) -> dict:
+        """Current session ``state``, or ``{}`` when the session does not exist."""
+        client = self._open_http()
+        response = await _await_adk(
+            client.get(
+                self._session_url(user_id, session_id),
+                headers=self._headers(),
+                timeout=SESSION_TIMEOUT_SEC,
+            ),
+            timeout_code=TEA_COLD_START,
+        )
+        if response.status_code in {404, 422}:
+            return {}
+        if response.status_code != 200:
+            _raise_for_status(response.status_code, response.text, scope="session")
+        try:
+            payload = response.json()
+        except ValueError:
+            return {}
+        state = payload.get("state") if isinstance(payload, dict) else None
+        return dict(state) if isinstance(state, dict) else {}
+
     async def _raise_for_run_failure(
         self,
         client: httpx.AsyncClient,
