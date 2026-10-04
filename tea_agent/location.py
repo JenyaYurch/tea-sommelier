@@ -186,6 +186,49 @@ def place_state_delta(place: Place) -> dict[str, str]:
     }
 
 
+# Last successful find_local_shops answer. Not ``temp:`` — it must outlive the
+# invocation that called the tool. Cleared when the city changes.
+LOCAL_SHOPS_LAST_KEY = "local_shops_last"
+LOCAL_SHOPS_SAVED_KEY = "local_shops_saved"
+
+
+def _cleared_local_shops() -> dict[str, Any]:
+    return {"status": "cleared", "shops": []}
+
+
+def local_shops_clear_delta(state: Any, city: str, country: str) -> dict[str, Any]:
+    """Replace the saved shop list when the directory city changes.
+
+    The same city keeps ``local_shops_last``. The first save, with no previous
+    city and no saved list, does not write a clear marker.
+    """
+    if state is None:
+        return {}
+    old_city = str(state.get("city") or state.get("user:city") or "").strip()
+    old_country = str(state.get("country") or state.get("user:country") or "").strip()
+    city_same = bool(old_city) and fold_text(old_city) == fold_text(city)
+    country_same = (
+        not old_country or not country or fold_text(old_country) == fold_text(country)
+    )
+    if city_same and country_same:
+        return {}
+    if (
+        not old_city
+        and LOCAL_SHOPS_LAST_KEY not in state
+        and LOCAL_SHOPS_SAVED_KEY not in state
+    ):
+        return {}
+    if not old_city:
+        saved = state.get(LOCAL_SHOPS_LAST_KEY)
+        saved_ok = isinstance(saved, dict) and saved.get("status") == "success"
+        if not saved_ok and state.get(LOCAL_SHOPS_SAVED_KEY) != "yes":
+            return {}
+    return {
+        LOCAL_SHOPS_LAST_KEY: _cleared_local_shops(),
+        LOCAL_SHOPS_SAVED_KEY: "",
+    }
+
+
 def place_from_state(state: Any) -> Place | None:
     if state is None:
         return None
@@ -223,6 +266,8 @@ def _write(state: Any, key: str, value: Any) -> None:
 
 
 def remember_place(state: Any, place: Place) -> None:
+    for key, value in local_shops_clear_delta(state, place.city, place.country).items():
+        state[key] = value
     for key, value in place_state_delta(place).items():
         if key.startswith("user:"):
             state[key] = value

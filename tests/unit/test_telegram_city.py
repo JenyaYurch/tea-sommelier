@@ -234,10 +234,10 @@ async def test_city_patches_remote_session_without_run() -> None:
     await city_cmd(update, context)
     assert "Minsk" in message.replies[-1]
     assert seen[0][0] == "GET"
-    assert seen[1] == (
+    assert (
         "PATCH",
         "/apps/tea_agent/users/tg-5/sessions/tg-sess-5",
-    )
+    ) in seen
     assert not any(method == "POST" and path.endswith("/run") for method, path in seen)
 
 
@@ -272,3 +272,148 @@ async def test_capture_helper_saves_a_parsed_place() -> None:
     assert session is not None
     assert session.state.get("user:city") == "Gdańsk"
     assert session.state.get("user:country") == "Poland"
+
+
+def _saved_shops() -> dict:
+    return {
+        "status": "success",
+        "city": "Warsaw",
+        "country": "Poland",
+        "class_label_ru": "зелёный",
+        "shops": [
+            {
+                "name": "Teasome",
+                "city": "Warsaw",
+                "same_city": True,
+                "url": "https://b2btea.com/en/c/teasome/",
+                "website": "https://teasome.example",
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_city_command_clears_saved_shops_only_when_the_city_changes() -> None:
+    from google.adk.sessions.in_memory_session_service import InMemorySessionService
+
+    service = InMemorySessionService()
+    await service.create_session(
+        app_name="tea_agent",
+        user_id=telegram_user_key(5),
+        session_id=telegram_session_id(5),
+        state={
+            "city": "Warsaw",
+            "user:city": "Warsaw",
+            "country": "Poland",
+            "user:country": "Poland",
+            "local_shops_last": _saved_shops(),
+            "local_shops_saved": "yes",
+        },
+    )
+    runner = SimpleNamespace(session_service=service, app_name="tea_agent")
+    context = SimpleNamespace(
+        args=["Warsaw"],
+        application=SimpleNamespace(bot_data={"access_gate": _gate(), "runner": runner}),
+        bot=None,
+    )
+    update, _message = _update(5, "/city Warsaw")
+    await city_cmd(update, context)
+    session = await service.get_session(
+        app_name="tea_agent",
+        user_id=telegram_user_key(5),
+        session_id=telegram_session_id(5),
+    )
+    assert session is not None
+    assert session.state["local_shops_last"]["status"] == "success"
+    assert session.state["local_shops_last"]["shops"][0]["name"] == "Teasome"
+    assert session.state.get("local_shops_saved") == "yes"
+
+    context.args = ["Минск"]
+    update, _message = _update(5, "/city Минск")
+    await city_cmd(update, context)
+    session = await service.get_session(
+        app_name="tea_agent",
+        user_id=telegram_user_key(5),
+        session_id=telegram_session_id(5),
+    )
+    assert session is not None
+    assert session.state.get("user:city") == "Minsk"
+    assert session.state["local_shops_last"]["status"] == "cleared"
+    assert session.state.get("local_shops_saved") == ""
+
+
+@pytest.mark.asyncio
+async def test_remote_city_change_clears_saved_shops_in_the_patch() -> None:
+    state = {
+        "city": "Warsaw",
+        "country": "Poland",
+        "user:city": "Warsaw",
+        "user:country": "Poland",
+        "local_shops_last": _saved_shops(),
+        "local_shops_saved": "yes",
+    }
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": "tg-sess-5", "state": state})
+        body = json_body(request)
+        assert body["state_delta"]["user:city"] == "Minsk"
+        assert body["state_delta"]["local_shops_last"]["status"] == "cleared"
+        assert body["state_delta"]["local_shops_saved"] == ""
+        return httpx.Response(200, json={"id": "tg-sess-5", "state": body["state_delta"]})
+
+    client = AdkHttpClient(
+        "https://tea-agent.example",
+        "tea_agent",
+        transport=httpx.MockTransport(handler),
+        auth_secret="secret",
+    )
+    context = SimpleNamespace(
+        args=["Минск"],
+        application=SimpleNamespace(bot_data={"access_gate": _gate(), "adk_client": client}),
+        bot=None,
+    )
+    update, message = _update(5, "/city Минск")
+    await city_cmd(update, context)
+    assert "Minsk" in message.replies[-1]
+    assert not any(method == "POST" and path.endswith("/run") for method, path in seen)
+
+
+@pytest.mark.asyncio
+async def test_remote_same_city_does_not_clear_saved_shops() -> None:
+    state = {
+        "city": "Warsaw",
+        "country": "Poland",
+        "user:city": "Warsaw",
+        "user:country": "Poland",
+        "local_shops_last": _saved_shops(),
+        "local_shops_saved": "yes",
+    }
+    patches: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": "tg-sess-5", "state": state})
+        body = json_body(request)
+        patches.append(body["state_delta"])
+        return httpx.Response(200, json={"id": "tg-sess-5"})
+
+    client = AdkHttpClient(
+        "https://tea-agent.example",
+        "tea_agent",
+        transport=httpx.MockTransport(handler),
+        auth_secret="secret",
+    )
+    context = SimpleNamespace(
+        args=["Warsaw"],
+        application=SimpleNamespace(bot_data={"access_gate": _gate(), "adk_client": client}),
+        bot=None,
+    )
+    update, message = _update(5, "/city Warsaw")
+    await city_cmd(update, context)
+    assert message.replies
+    assert patches
+    assert "local_shops_last" not in patches[-1]
+    assert patches[-1]["user:city"] == "Warsaw"
