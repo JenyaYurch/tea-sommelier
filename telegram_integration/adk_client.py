@@ -5,12 +5,15 @@ Used by Telegram webhook mode. Local polling still runs the agent in-process.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable
+import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
 
 from tea_agent.app_utils.agent_auth import request_headers
+
+logger = logging.getLogger("telegram_integration.adk_client")
 
 DEFAULT_APP_NAME = "tea_agent"
 SESSION_TIMEOUT_SEC = 10.0
@@ -174,6 +177,15 @@ def _raise_for_status(status_code: int, body: str, *, scope: str) -> None:
     )
 
 
+def _response_means_missing_session(response: httpx.Response) -> bool:
+    """True when tea-agent no longer has this session (restart wiped memory)."""
+    if response.status_code == 200:
+        return False
+    if response.status_code == 404:
+        return True
+    return "session not found" in (response.text or "").casefold()
+
+
 async def _await_adk(
     awaitable: Awaitable[httpx.Response], *, timeout_code: str
 ) -> httpx.Response:
@@ -189,7 +201,14 @@ async def _await_adk(
 
 
 class AdkHttpClient:
-    """Create/reuse an ADK session and POST /run."""
+    """Create/reuse an ADK session and POST /run.
+
+    One ``httpx.AsyncClient`` lives for the life of this object (one per
+    process in the bot). Call :meth:`aclose` on shutdown. Sessions that have
+    already been seen skip the existence GET. A tea-agent restart that drops
+    in-memory sessions comes back as 404 or "Session not found"; that path
+    creates the session again and retries the call once.
+    """
 
     def __init__(
         self,
@@ -206,30 +225,91 @@ class AdkHttpClient:
         self._transport = transport
         # None reads TEA_AGENT_AUTH_SECRET at request time. "" sends no header.
         self.auth_secret = auth_secret
+        self._http: httpx.AsyncClient | None = None
+        self._known_sessions: set[tuple[str, str]] = set()
+
+    def _headers(self) -> dict[str, str]:
+        return request_headers(self.auth_secret)
+
+    def _open_http(self) -> httpx.AsyncClient:
+        """The shared client. Opened on first use, closed by :meth:`aclose`."""
+        client = self._http
+        if client is None or client.is_closed:
+            client = httpx.AsyncClient(
+                transport=self._transport,
+                timeout=httpx.Timeout(self.timeout, connect=SESSION_TIMEOUT_SEC),
+            )
+            self._http = client
+        return client
+
+    async def aclose(self) -> None:
+        """Close the shared HTTP client. Safe to call more than once."""
+        client = self._http
+        self._http = None
+        if client is not None and not client.is_closed:
+            await client.aclose()
 
     def _session_url(self, user_id: str, session_id: str) -> str:
-        return (
-            f"{self.base_url}/apps/{self.app_name}/users/{user_id}/sessions/{session_id}"
-        )
+        return f"{self.base_url}/apps/{self.app_name}/users/{user_id}/sessions/{session_id}"
+
+    def _remember_session(self, user_id: str, session_id: str) -> None:
+        self._known_sessions.add((user_id, session_id))
+
+    def _forget_session(self, user_id: str, session_id: str) -> None:
+        self._known_sessions.discard((user_id, session_id))
 
     async def ensure_session(
-        self, client: httpx.AsyncClient, user_id: str, session_id: str
+        self,
+        client: httpx.AsyncClient,
+        user_id: str,
+        session_id: str,
+        *,
+        force: bool = False,
     ) -> None:
+        if not force and (user_id, session_id) in self._known_sessions:
+            return
         url = self._session_url(user_id, session_id)
+        headers = self._headers()
         check = await _await_adk(
-            client.get(url, timeout=SESSION_TIMEOUT_SEC),
+            client.get(url, headers=headers, timeout=SESSION_TIMEOUT_SEC),
             timeout_code=TEA_COLD_START,
         )
         if check.status_code == 200:
+            self._remember_session(user_id, session_id)
             return
         if check.status_code not in {404, 422}:
             _raise_for_status(check.status_code, check.text, scope="session")
         created = await _await_adk(
-            client.post(url, json={}, timeout=SESSION_TIMEOUT_SEC),
+            client.post(url, headers=headers, json={}, timeout=SESSION_TIMEOUT_SEC),
             timeout_code=TEA_COLD_START,
         )
         if created.status_code not in {200, 201}:
             _raise_for_status(created.status_code, created.text, scope="session")
+        self._remember_session(user_id, session_id)
+
+    async def _call_with_session(
+        self,
+        user_id: str,
+        session_id: str,
+        send: Callable[[httpx.AsyncClient], Awaitable[httpx.Response]],
+    ) -> httpx.Response:
+        """Send once. If the session was wiped, create it and send one more time."""
+        client = self._open_http()
+        await self.ensure_session(client, user_id, session_id)
+        response = await send(client)
+        if not _response_means_missing_session(response):
+            return response
+        logger.info(
+            "ADK session missing user=%s session=%s; recreating and retrying once",
+            user_id,
+            session_id,
+        )
+        self._forget_session(user_id, session_id)
+        await self.ensure_session(client, user_id, session_id, force=True)
+        response = await send(client)
+        if _response_means_missing_session(response):
+            self._forget_session(user_id, session_id)
+        return response
 
     async def patch_session_state(
         self, user_id: str, session_id: str, state_delta: dict
@@ -239,21 +319,21 @@ class AdkHttpClient:
         ADK accepts ``{"state_delta": {...}}`` on the session URL. Used by
         ``/city`` and ``/currency`` so a session update does not spend a Gemini turn.
         """
-        async with httpx.AsyncClient(
-            transport=self._transport,
-            headers=request_headers(self.auth_secret),
-        ) as client:
-            await self.ensure_session(client, user_id, session_id)
-            response = await _await_adk(
+
+        async def send(client: httpx.AsyncClient) -> httpx.Response:
+            return await _await_adk(
                 client.patch(
                     self._session_url(user_id, session_id),
+                    headers=self._headers(),
                     json={"state_delta": state_delta},
                     timeout=SESSION_TIMEOUT_SEC,
                 ),
                 timeout_code=TEA_COLD_START,
             )
-            if response.status_code not in {200, 201}:
-                _raise_for_status(response.status_code, response.text, scope="session")
+
+        response = await self._call_with_session(user_id, session_id, send)
+        if response.status_code not in {200, 201}:
+            _raise_for_status(response.status_code, response.text, scope="session")
 
     async def _raise_for_run_failure(
         self,
@@ -272,6 +352,7 @@ class AdkHttpClient:
                 session = await _await_adk(
                     client.get(
                         self._session_url(user_id, session_id),
+                        headers=self._headers(),
                         timeout=SESSION_TIMEOUT_SEC,
                     ),
                     timeout_code=TEA_COLD_START,
@@ -291,14 +372,11 @@ class AdkHttpClient:
         _raise_for_status(response.status_code, response.text, scope="run")
 
     async def ask(self, user_id: str, session_id: str, text: str) -> str:
-        async with httpx.AsyncClient(
-            transport=self._transport,
-            headers=request_headers(self.auth_secret),
-        ) as client:
-            await self.ensure_session(client, user_id, session_id)
-            response = await _await_adk(
+        async def send(client: httpx.AsyncClient) -> httpx.Response:
+            return await _await_adk(
                 client.post(
                     f"{self.base_url}/run",
+                    headers=self._headers(),
                     json={
                         "appName": self.app_name,
                         "userId": user_id,
@@ -312,29 +390,29 @@ class AdkHttpClient:
                 ),
                 timeout_code=TEA_TIMEOUT_RUN,
             )
-            if response.status_code != 200:
-                await self._raise_for_run_failure(
-                    client, user_id, session_id, response
-                )
-            return extract_reply_text(response.json())
+
+        response = await self._call_with_session(user_id, session_id, send)
+        if response.status_code != 200:
+            await self._raise_for_run_failure(
+                self._open_http(), user_id, session_id, response
+            )
+        return extract_reply_text(response.json())
 
     async def submit_feedback(self, payload: dict) -> None:
         """POST /feedback. Does not open a session and does not call the model."""
-        async with httpx.AsyncClient(
-            transport=self._transport,
-            headers=request_headers(self.auth_secret),
-        ) as client:
-            response = await _await_adk(
-                client.post(
-                    f"{self.base_url}/feedback",
-                    json=payload,
-                    timeout=FEEDBACK_TIMEOUT_SEC,
-                ),
-                timeout_code=TEA_UNAVAILABLE,
+        client = self._open_http()
+        response = await _await_adk(
+            client.post(
+                f"{self.base_url}/feedback",
+                headers=self._headers(),
+                json=payload,
+                timeout=FEEDBACK_TIMEOUT_SEC,
+            ),
+            timeout_code=TEA_UNAVAILABLE,
+        )
+        if response.status_code != 200:
+            raise AdkClientError(
+                f"ADK /feedback failed: {response.status_code}",
+                error_code=TEA_AGENT_ERROR,
+                status_code=response.status_code,
             )
-            if response.status_code != 200:
-                raise AdkClientError(
-                    f"ADK /feedback failed: {response.status_code}",
-                    error_code=TEA_AGENT_ERROR,
-                    status_code=response.status_code,
-                )

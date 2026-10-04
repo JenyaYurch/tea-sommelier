@@ -13,6 +13,7 @@ import uuid
 from telegram_integration.adk_client import AdkHttpClient
 from telegram_integration.deploy_spec import ADK_APP_NAME
 from telegram_integration.keyboard import telegram_session_id, telegram_user_key
+from telegram_integration.turn_gate import get_turn_gate
 
 logger = logging.getLogger("telegram_integration.session_state")
 
@@ -64,26 +65,31 @@ async def write_session_delta(
     *,
     what: str,
 ) -> bool:
-    """Merge ``delta`` into the ADK session. False when nothing was stored."""
-    client = bot_data.get("adk_client")
-    try:
-        if isinstance(client, AdkHttpClient):
-            await client.patch_session_state(
-                telegram_user_key(telegram_user_id),
-                telegram_session_id(telegram_user_id),
-                delta,
+    """Merge ``delta`` into the ADK session. False when nothing was stored.
+
+    Uses the same per-user lock as an agent turn, so ``/city`` and
+    ``/currency`` cannot overlap ``/run`` on that session.
+    """
+    async with get_turn_gate(bot_data).lock_for(telegram_user_id):
+        client = bot_data.get("adk_client")
+        try:
+            if isinstance(client, AdkHttpClient):
+                await client.patch_session_state(
+                    telegram_user_key(telegram_user_id),
+                    telegram_session_id(telegram_user_id),
+                    delta,
+                )
+                return True
+            runner = bot_data.get("runner")
+            if runner is None:
+                return False
+            await _write_runner_state(runner, telegram_user_id, delta)
+        except Exception as err:
+            logger.warning(
+                "could not save %s for telegram user %s (%s)",
+                what,
+                telegram_user_id,
+                type(err).__name__,
             )
-            return True
-        runner = bot_data.get("runner")
-        if runner is None:
             return False
-        await _write_runner_state(runner, telegram_user_id, delta)
-    except Exception as err:
-        logger.warning(
-            "could not save %s for telegram user %s (%s)",
-            what,
-            telegram_user_id,
-            type(err).__name__,
-        )
-        return False
-    return True
+        return True

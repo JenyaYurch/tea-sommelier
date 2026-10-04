@@ -77,6 +77,7 @@ from telegram_integration.keyboard import (
     telegram_session_id,
     telegram_user_key,
 )
+from telegram_integration.turn_gate import get_turn_gate
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -278,17 +279,28 @@ async def _run_agent_and_reply(
     bot,
     bot_data: dict,
 ) -> None:
+    """Run one turn and send the reply.
+
+    One Telegram user runs one turn at a time so two taps cannot overlap on
+    the same ADK session. Other users are not blocked. Typing starts before
+    the lock, so a turn that is waiting still shows the indicator. The caller
+    already consumed the rate-limit token at arrival; waiting does not take
+    another one and does not give it back.
+    """
     stop = asyncio.Event()
     typing_task = asyncio.create_task(_typing_loop(target.chat_id, bot, stop))
     try:
-        reply = await ask_agent(bot_data, telegram_user_id, text)
-        if not reply:
-            _log_agent_failure(telegram_user_id, TEA_EMPTY_REPLY)
-            reply = EMPTY_REPLY_TEXT
-    except Exception as err:
-        error_code = classify_adk_error(err)
-        _log_agent_failure(telegram_user_id, error_code, err)
-        reply = user_text_for_error_code(error_code)
+        async with get_turn_gate(bot_data).lock_for(telegram_user_id):
+            try:
+                reply = await ask_agent(bot_data, telegram_user_id, text)
+                if not reply:
+                    _log_agent_failure(telegram_user_id, TEA_EMPTY_REPLY)
+                    reply = EMPTY_REPLY_TEXT
+            except Exception as err:
+                error_code = classify_adk_error(err)
+                _log_agent_failure(telegram_user_id, error_code, err)
+                reply = user_text_for_error_code(error_code)
+            await _deliver_reply(target, reply)
     finally:
         stop.set()
         typing_task.cancel()
@@ -296,7 +308,6 @@ async def _run_agent_and_reply(
             await typing_task
         except asyncio.CancelledError:
             pass
-    await _deliver_reply(target, reply)
 
 
 def _start_code(context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -447,6 +458,13 @@ async def post_init_webhook(application: Application) -> None:
     logger.info("Webhook as @%s (url_path is the bot token, not logged)", me.username)
 
 
+async def _close_adk_client(application: Application) -> None:
+    """Close the shared tea-agent HTTP client when the bot shuts down."""
+    client = application.bot_data.get("adk_client")
+    if isinstance(client, AdkHttpClient):
+        await client.aclose()
+
+
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     err = context.error
     if isinstance(err, Conflict):
@@ -514,6 +532,7 @@ def main() -> None:
         Application.builder()
         .token(token)
         .post_init(post_init_webhook if webhook else post_init_polling)
+        .post_shutdown(_close_adk_client)
         .concurrent_updates(True)
         .build()
     )
