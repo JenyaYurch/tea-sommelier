@@ -75,6 +75,7 @@ async def remember_place(bot_data: dict, telegram_user_id: int, place: Place) ->
         telegram_user_id,
         place_state_delta(place),
         what="city",
+        shops_place=(place.city, place.country),
     )
 
 
