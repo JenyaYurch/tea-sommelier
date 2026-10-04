@@ -261,8 +261,9 @@ def format_vitrine_price_section(
     """Grounded teashop.by prices, plus one «нет в наличии» line per sold-out tea.
 
     In-stock lines still lead with ``price_display``. Sold-out lines name the
-    tea and do not include a URL or a price. When every tea in this block is
-    sold out, one summary line says so.
+    tea and do not include a URL or a price. The «не цена магазина рядом» note
+    is included only when at least one price line is shown. When every tea in
+    this block is sold out, one summary line says so.
     """
     lines: list[str] = []
     seen: set[str] = set()
@@ -296,8 +297,10 @@ def format_vitrine_price_section(
             break
     if not lines and not miss_lines:
         return ""
-    block = [VITRINE_PRICE_HEADING, VITRINE_PRICE_NOTE]
-    if not lines and not products:
+    block = [VITRINE_PRICE_HEADING]
+    if lines:
+        block.append(VITRINE_PRICE_NOTE)
+    elif not products:
         block.append(VITRINE_NONE_IN_STOCK)
     block.extend(lines)
     block.extend(miss_lines)

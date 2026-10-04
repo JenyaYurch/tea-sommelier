@@ -13,6 +13,7 @@ from tea_agent.next_steps import (
     SHOP_MISSES_KEY,
     VITRINE_NONE_IN_STOCK,
     VITRINE_PRICE_HEADING,
+    VITRINE_PRICE_NOTE,
     attach_next_steps_to_response,
     collect_shop_hits,
     ensure_next_steps,
@@ -381,6 +382,8 @@ def test_in_stock_links_are_not_cancelled_by_a_general_stock_denial() -> None:
     assert VITRINE_NONE_IN_STOCK not in updated
 
     vitrine = updated.split(VITRINE_PRICE_HEADING, 1)[1].split("###", 1)[0]
+    assert VITRINE_PRICE_NOTE in vitrine
+    assert vitrine.index(VITRINE_PRICE_NOTE) < vitrine.index(EUR_LINE)
     assert "Бай Мао Хоу" in vitrine
     for line in vitrine.splitlines():
         if "Бай Мао" in line:
@@ -417,11 +420,13 @@ def test_no_in_stock_tea_is_said_once_and_has_no_buy_link() -> None:
     updated = ensure_next_steps(text, [], unavailable=unavailable)
 
     assert updated.count(VITRINE_NONE_IN_STOCK) == 1
+    assert VITRINE_PRICE_NOTE not in updated
     assert "не могу предоставить" not in updated
     assert BAI_MAO_URL not in updated
     assert FENIX_URL not in updated
     assert "http" not in updated
     vitrine = updated.split(VITRINE_PRICE_HEADING, 1)[1].split("###", 1)[0]
+    assert vitrine.lstrip().startswith(VITRINE_NONE_IN_STOCK)
     assert vitrine.count("нет в наличии") >= 2
     for line in vitrine.splitlines():
         if "Бай Мао" in line or "Феникса" in line or "Моли" in line:
