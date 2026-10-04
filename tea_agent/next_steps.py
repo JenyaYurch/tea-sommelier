@@ -502,7 +502,12 @@ def _strip_url_set(text: str, urls: set[str]) -> str:
     return re.sub(r"https?://[^\s)>\]]+", _replace_bare, cleaned)
 
 
-_SHOP_ASK = re.compile(r"магазин|ссылк|где\s+рядом|b2btea", re.IGNORECASE)
+# A bare «ссылк» is a product link («дай ссылку на чай»), not a shop ask.
+# «магазин» covers «магазины рядом», the chip, and «ссылк» together with «магазин».
+_SHOP_TOPIC = re.compile(
+    r"магазин|где\s+купить\s+рядом|где\s+рядом",
+    re.IGNORECASE,
+)
 _CARD_SITE = re.compile(
     r"карточк|официальн|(?<![0-9a-zа-яё])сайт(?![0-9a-zа-яё])",
     re.IGNORECASE,
@@ -577,6 +582,11 @@ def _strip_free_text_shop_list(text: str, payload: dict[str, Any] | None) -> str
     return cleaned.strip()
 
 
+def _user_asked_about_shops(text: str) -> bool:
+    """True for a nearby-shop question, not a teashop product link."""
+    return bool(text) and _SHOP_TOPIC.search(text) is not None
+
+
 def _should_restore_local_shops(
     reply: str, stored: dict[str, Any] | None, user_text: str
 ) -> bool:
@@ -584,7 +594,7 @@ def _should_restore_local_shops(
         return False
     if not format_local_shops_section(stored):
         return False
-    if _SHOP_ASK.search(user_text):
+    if _user_asked_about_shops(user_text):
         return True
     return _shop_name_hits(reply, _stored_shop_names(stored)) >= 1
 
@@ -601,8 +611,9 @@ def _local_shops_for_reply(
 ) -> dict[str, Any] | None:
     """This turn's tool payload wins, including not_found and error.
 
-    Stored shops are used only when the tool did not run and the reply names
-    those shops, or the user asked about shops or links.
+    Stored shops are used only when the tool did not run and either the user
+    asked about shops, or the reply names one of those shops. A product-link
+    question («дай ссылку на чай») does not restore them.
     """
     if isinstance(turn, dict):
         return turn

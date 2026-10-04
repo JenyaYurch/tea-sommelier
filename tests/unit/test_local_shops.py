@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from google.adk.models.llm_response import LlmResponse
 from google.genai import types
 
@@ -461,6 +462,87 @@ def test_unrelated_reply_does_not_insert_stored_shops() -> None:
     )
     assert updated == "80 °C и около трёх граммов."
     assert LOCAL_SHOPS_HEADING not in updated
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "магазин",
+        "магазины рядом",
+        "где рядом",
+        "где купить рядом",
+        "[магазины рядом]",
+        "Где ссылки на магазины?",
+        "ссылки на магазины",
+        "дай ссылку на магазин",
+    ],
+)
+def test_shop_questions_reattach_the_saved_block(user_text: str) -> None:
+    payload = _tester_shops()
+    updated = ensure_next_steps(
+        "Сейчас пришлю.",
+        stored_shops=payload,
+        user_text=user_text,
+    )
+    assert LOCAL_SHOPS_HEADING in updated
+    assert "teasome.example" in updated
+    assert "Сейчас пришлю." in updated.split(LOCAL_SHOPS_HEADING, 1)[0]
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "дай ссылку на чай",
+        "пришли ссылку на лунцзин",
+        "где купить лунцзин",
+        "ссылка",
+        "b2btea",
+    ],
+)
+def test_a_product_link_question_does_not_reattach_saved_shops(user_text: str) -> None:
+    reply = (
+        "Ссылка на Лунцзин: "
+        "[Купить](https://www.teashop.by/product/longjing-1/)"
+    )
+    updated = ensure_next_steps(
+        reply,
+        stored_shops=_tester_shops(),
+        user_text=user_text,
+    )
+    assert updated == reply
+    assert LOCAL_SHOPS_HEADING not in updated
+    assert "teasome.example" not in updated
+    assert "b2btea.com" not in updated
+
+
+def test_tea_link_question_stays_shop_free_on_a_recommendation() -> None:
+    reply = (
+        "1. Би Ло Чунь — зелёный чай.\n"
+        "2. Лунцзин — мягкий утренний чай.\n"
+        "3. Аньцзи Бай Ча — светлый вкус.\n"
+        f"Ссылка: [Купить: Лунцзин]({LONGJING_URL})"
+    )
+    updated = ensure_next_steps(
+        reply,
+        stored_shops=_tester_shops(),
+        user_text="дай ссылку на чай",
+    )
+    assert LOCAL_SHOPS_HEADING not in updated
+    assert "teasome.example" not in updated
+    assert "b2btea.com" not in updated
+    assert LONGJING_URL in updated
+    assert "### Что дальше" in updated
+
+
+def test_naming_a_saved_shop_restores_the_block_on_a_product_link_question() -> None:
+    payload = _tester_shops()
+    updated = ensure_next_steps(
+        "Карточка Teasome: официальный сайт.",
+        stored_shops=payload,
+        user_text="дай ссылку на чай",
+    )
+    assert LOCAL_SHOPS_HEADING in updated
+    assert "teasome.example" in updated
 
 
 def test_numbered_shop_list_is_not_a_second_list_or_a_buy_link() -> None:
