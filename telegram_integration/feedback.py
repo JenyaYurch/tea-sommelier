@@ -62,6 +62,10 @@ HELP_TEXT = (
     "/city Warsaw — запомнить город (можно «Варшава» или «Warsaw, Poland»). "
     "Без текста команда спросит город. Он хранится в этой сессии. "
     "/city не тратит лимит и не уходит сомелье как вопрос.\n\n"
+    "/currency USD — валюта цен витрины: EUR, USD или BYN. "
+    "Без текста команда покажет три кнопки. Пока ничего не выбрано, цены в EUR. "
+    "Город валюту не выбирает. "
+    "/currency не тратит лимит и не уходит сомелье как вопрос.\n\n"
     "/feedback и текст — отзыв владельцу (что понравилось или что сломалось). "
     "Без текста команда попросит следующее сообщение; оно тоже не уйдёт сомелье.\n\n"
     "Это закрытая бета. Если бот молчит, напишите владельцу."
@@ -71,6 +75,7 @@ BOT_COMMANDS = (
     ("start", "Начать"),
     ("help", "Памятка"),
     ("city", "Город"),
+    ("currency", "Валюта"),
     ("feedback", "Отзыв"),
 )
 
@@ -178,7 +183,7 @@ def _message_id(message: Message) -> int | None:
 
 
 async def publish_bot_commands(bot) -> None:
-    """Show /start, /help, /city, and /feedback in the Telegram menu. Failures are logged."""
+    """Show /start, /help, /city, /currency, and /feedback in the Telegram menu. Failures are logged."""
     from telegram import BotCommand
 
     try:

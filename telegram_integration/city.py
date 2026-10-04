@@ -9,17 +9,14 @@ message quota. A blocked user is refused and nothing is stored.
 from __future__ import annotations
 
 import logging
-import uuid
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from tea_agent.location import Place, parse_place, place_state_delta
 from telegram_integration.access import get_access_gate
-from telegram_integration.adk_client import AdkHttpClient
-from telegram_integration.deploy_spec import ADK_APP_NAME
 from telegram_integration.feedback import clear_pending_feedback
-from telegram_integration.keyboard import telegram_session_id, telegram_user_key
+from telegram_integration.session_state import write_session_delta
 
 logger = logging.getLogger("telegram_integration.city")
 
@@ -71,70 +68,14 @@ def is_pending_city(bot_data: dict, telegram_user_id: int) -> bool:
     return int(telegram_user_id) in _pending(bot_data)
 
 
-def _runner_app_name(runner: object) -> str:
-    name = getattr(runner, "app_name", None)
-    if isinstance(name, str) and name.strip():
-        return name.strip()
-    app = getattr(runner, "app", None)
-    app_name = getattr(app, "name", None)
-    if isinstance(app_name, str) and app_name.strip():
-        return app_name.strip()
-    return ADK_APP_NAME
-
-
-async def _write_runner_state(runner: object, telegram_user_id: int, delta: dict) -> None:
-    from google.adk.events.event import Event
-    from google.adk.events.event_actions import EventActions
-
-    service = runner.session_service
-    app_name = _runner_app_name(runner)
-    user_id = telegram_user_key(telegram_user_id)
-    session_id = telegram_session_id(telegram_user_id)
-    session = await service.get_session(
-        app_name=app_name, user_id=user_id, session_id=session_id
-    )
-    if session is None:
-        await service.create_session(
-            app_name=app_name,
-            user_id=user_id,
-            session_id=session_id,
-            state=delta,
-        )
-        return
-    await service.append_event(
-        session,
-        Event(
-            invocation_id=f"city-{uuid.uuid4().hex[:12]}",
-            author="tea_sommelier",
-            actions=EventActions(state_delta=delta),
-        ),
-    )
-
-
 async def remember_place(bot_data: dict, telegram_user_id: int, place: Place) -> bool:
     """Write city and country into the ADK session. False on failure."""
-    delta = place_state_delta(place)
-    client = bot_data.get("adk_client")
-    try:
-        if isinstance(client, AdkHttpClient):
-            await client.patch_session_state(
-                telegram_user_key(telegram_user_id),
-                telegram_session_id(telegram_user_id),
-                delta,
-            )
-            return True
-        runner = bot_data.get("runner")
-        if runner is None:
-            return False
-        await _write_runner_state(runner, telegram_user_id, delta)
-    except Exception as err:
-        logger.warning(
-            "could not save city for telegram user %s (%s)",
-            telegram_user_id,
-            type(err).__name__,
-        )
-        return False
-    return True
+    return await write_session_delta(
+        bot_data,
+        telegram_user_id,
+        place_state_delta(place),
+        what="city",
+    )
 
 
 def _looks_like_place_attempt(text: str) -> bool:

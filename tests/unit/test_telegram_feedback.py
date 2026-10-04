@@ -563,6 +563,7 @@ def test_handlers_include_help_feedback_and_both_callback_prefixes() -> None:
                 patterns.append(
                     pattern.pattern if hasattr(pattern, "pattern") else str(pattern)
                 )
-    assert {"start", "help", "city", "feedback"} <= commands
+    assert {"start", "help", "city", "currency", "feedback"} <= commands
     assert any(item.startswith("^tea:f:") for item in patterns)
+    assert any(item.startswith("^tea:c:") for item in patterns)
     assert any(item.startswith("^tea:a:") for item in patterns)
