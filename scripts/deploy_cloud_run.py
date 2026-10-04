@@ -10,9 +10,17 @@ a new revision still does. Set ``CLOUD_SQL_INSTANCE`` or
 tea-agent requires Secret Manager secret ``TEA_AGENT_AUTH_SECRET`` before
 ``--execute``. Create it once (docs/HOW_TO.md). Do not commit the value.
 
+After ``--execute``, a smoke test calls tea-agent only: ``GET /health`` is 200,
+``POST /run`` without ``X-Tea-Agent-Token`` is 401, then one short ``/run``
+with the token (read from Secret Manager, never printed) returns a non-empty
+answer. ``--smoke-only`` reruns that check. ``--skip-smoke`` skips it.
+The smoke user is not a Telegram id, and telegram-integration is not called.
+
 Usage:
     uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014
     uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 --execute
+    uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 --smoke-only
+    uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 --execute --skip-smoke
 """
 
 from __future__ import annotations
@@ -24,9 +32,17 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from tea_agent.app_utils.agent_auth import AUTH_HEADER, AUTH_SECRET_ENV
+import httpx
+
+from tea_agent.app_utils.agent_auth import AUTH_HEADER, AUTH_SECRET_ENV, request_headers
 from tea_agent.app_utils.session_uri import normalize_cloud_sql_instance
+from telegram_integration.adk_client import (
+    RUN_TIMEOUT_SEC,
+    extract_reply_text,
+    normalize_adk_base_url,
+)
 from telegram_integration.deploy_spec import (
     ADK_APP_NAME,
     AGENT_CONCURRENCY,
@@ -60,6 +76,14 @@ CLOUD_SQL_CLIENT_ROLE = "roles/cloudsql.client"
 BUILDER_ROLE = "roles/run.builder"
 IAM_SETTLE_SEC = 30
 VERIFY_ATTEMPTS = 5
+# Not a Telegram id. ADK user ids for real chats are tg-<digits>.
+SMOKE_USER_ID = "tea-smoke"
+SMOKE_SESSION_ID = "tea-smoke-1"
+SMOKE_MESSAGE = "Привет"
+SMOKE_RUN_TIMEOUT_SEC = RUN_TIMEOUT_SEC
+SMOKE_FAST_TIMEOUT_SEC = 20.0
+SMOKE_ATTEMPTS = 4
+_TRANSIENT_STATUS = frozenset({502, 503, 504})
 
 
 def _gcloud_bin() -> str:
@@ -193,7 +217,7 @@ def _ensure_session_backend(
     return engine_id, engine_location, conn, user, database
 
 
-def _print_plan(project: str, region: str) -> None:
+def _print_plan(project: str, region: str, *, skip_smoke: bool = False) -> None:
     engine_id, engine_location = _agent_engine_env()
     cloud_sql, session_user, session_db = _normalized_cloud_sql(project, region)
     print("Cloud Run two-stage plan (no secrets printed)")
@@ -282,6 +306,31 @@ def _print_plan(project: str, region: str) -> None:
             adk_server_url="https://<tea-agent-url>",
             service_url="https://<telegram-integration-url>",
         ),
+    )
+    print()
+    print(
+        "After deploy, smoke-test tea-agent only "
+        f"(user {SMOKE_USER_ID}, session {SMOKE_SESSION_ID}):"
+    )
+    print("  GET /health -> 200")
+    print(f"  POST /run without {AUTH_HEADER} -> 401")
+    print(
+        f"  POST /run with {AUTH_HEADER} (Secret Manager {AUTH_SECRET_ENV}, "
+        "value not printed) -> non-empty answer, then DELETE that session"
+    )
+    print(
+        "Smoke does not call telegram-integration, does not send a Telegram "
+        "message, and does not spend a per-user rate limit."
+    )
+    print("Rerun later with --smoke-only. Skip with --execute --skip-smoke.")
+    if skip_smoke:
+        print("--skip-smoke is set. --execute will not run the smoke test.")
+    print()
+    print(
+        "--execute replaces telegram-integration's whole env block "
+        "(--set-env-vars). Export TELEGRAM_ALLOWED_USER_IDS and "
+        "TELEGRAM_ADMIN_USER_IDS again in this shell (semicolons; see "
+        "docs/HOW_TO.md) or the new revision comes up closed with an empty allowlist."
     )
     print()
     print("Dry-run only. Pass --execute after explicit approval to deploy.")
@@ -472,7 +521,9 @@ def _require_auth_secret(project: str) -> None:
     )
 
 
-def _execute(project: str, region: str, *, skip_verify: bool = False) -> None:
+def _execute(
+    project: str, region: str, *, skip_verify: bool = False, skip_smoke: bool = False
+) -> None:
     print(f"Using GCP project {project}")
     print(f"Cloud Run region {region}")
     _require_auth_secret(project)
@@ -537,8 +588,291 @@ def _execute(project: str, region: str, *, skip_verify: bool = False) -> None:
             service_url=telegram_url,
         ),
     )
+    if skip_smoke:
+        print("Skipping post-deploy smoke (--skip-smoke).")
+    else:
+        _run_post_deploy_smoke(project, agent_url)
     print("Deploy finished. Webhook path is <SERVICE_URL>/<TELEGRAM_BOT_TOKEN>.")
     print("Send /start in Telegram. Do not run local polling at the same time.")
+
+
+def smoke_urls(base_url: str) -> dict[str, str]:
+    base = normalize_adk_base_url(base_url)
+    session = (
+        f"{base}/apps/{ADK_APP_NAME}/users/{SMOKE_USER_ID}/sessions/{SMOKE_SESSION_ID}"
+    )
+    return {"health": f"{base}/health", "run": f"{base}/run", "session": session}
+
+
+def _redact(text: str, secret: str) -> str:
+    if not secret or not text:
+        return text
+    return text.replace(secret, "[redacted]")
+
+
+def _snippet(response: httpx.Response, secret: str) -> str:
+    text = _redact(response.text or "", secret)
+    return " ".join(text.split())[:180]
+
+
+def _smoke_fail(message: str) -> None:
+    print(
+        "Post-deploy smoke failed. tea-agent did not pass the chat check. "
+        "Fix it before sending /start in Telegram.",
+        file=sys.stderr,
+    )
+    _fail(message)
+
+
+def _request(
+    client: httpx.Client,
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    timeout: float,
+    secret: str,
+    json_body: object | None = None,
+    attempts: int = SMOKE_ATTEMPTS,
+    retry_timeouts: bool = True,
+) -> httpx.Response:
+    path = urlsplit(url).path or url
+    last_error = f"{method} {path} failed"
+    for attempt in range(1, attempts + 1):
+        try:
+            response = client.request(
+                method,
+                url,
+                headers=headers,
+                json=json_body,
+                timeout=timeout,
+            )
+        except httpx.TimeoutException as err:
+            last_error = f"{method} {path} timed out ({type(err).__name__})"
+            if not retry_timeouts or attempt == attempts:
+                _smoke_fail(last_error)
+            print(f"{last_error}; retrying")
+            time.sleep(min(2 * attempt, 8))
+            continue
+        except httpx.HTTPError as err:
+            detail = _redact(str(err), secret)
+            last_error = f"{method} {path} failed ({type(err).__name__}: {detail})"
+            if attempt == attempts:
+                _smoke_fail(last_error)
+            print(f"{last_error}; retrying")
+            time.sleep(min(2 * attempt, 8))
+            continue
+        if response.status_code in _TRANSIENT_STATUS and attempt < attempts:
+            print(f"{method} {path} returned {response.status_code}; retrying")
+            time.sleep(min(2 * attempt, 8))
+            continue
+        return response
+    _smoke_fail(last_error)
+    raise SystemExit(1)
+
+
+def _access_auth_secret(project: str) -> str:
+    """Read TEA_AGENT_AUTH_SECRET the way Cloud Run does. Never print it."""
+    proc = _gcloud(
+        [
+            "secrets",
+            "versions",
+            "access",
+            "latest",
+            f"--secret={AUTH_SECRET_ENV}",
+            f"--project={project}",
+        ]
+    )
+    if proc.returncode != 0:
+        _fail(
+            f"Could not read Secret Manager secret {AUTH_SECRET_ENV}. "
+            "The account running deploy needs roles/secretmanager.secretAccessor "
+            "on that secret. The value was not printed.",
+            proc,
+        )
+    value = (proc.stdout or "").strip()
+    if not value:
+        _fail(f"Secret {AUTH_SECRET_ENV} is empty. The value was not printed.")
+    return value
+
+
+def _expect_health(client: httpx.Client, url: str, secret: str) -> None:
+    response = _request(
+        client,
+        "GET",
+        url,
+        headers={},
+        timeout=SMOKE_FAST_TIMEOUT_SEC,
+        secret=secret,
+    )
+    if response.status_code != 200:
+        _smoke_fail(f"GET /health returned {response.status_code}, expected 200.")
+    print("Smoke GET /health 200")
+
+
+def _expect_unauthorized(client: httpx.Client, url: str, secret: str) -> None:
+    response = _request(
+        client,
+        "POST",
+        url,
+        headers={},
+        json_body={"appName": ADK_APP_NAME},
+        timeout=SMOKE_FAST_TIMEOUT_SEC,
+        secret=secret,
+    )
+    if response.status_code != 401:
+        _smoke_fail(
+            f"POST /run without {AUTH_HEADER} returned {response.status_code}, "
+            f"expected 401. {_snippet(response, secret)}".rstrip()
+        )
+    print(f"Smoke POST /run without {AUTH_HEADER} 401")
+
+
+def _ensure_smoke_session(client: httpx.Client, url: str, secret: str) -> None:
+    headers = request_headers(secret)
+    existing = _request(
+        client,
+        "GET",
+        url,
+        headers=headers,
+        timeout=SMOKE_FAST_TIMEOUT_SEC,
+        secret=secret,
+    )
+    if existing.status_code == 401:
+        _smoke_fail(
+            f"Smoke session lookup returned 401. {AUTH_SECRET_ENV} does not match "
+            "the revision. The secret value was not printed."
+        )
+    if existing.status_code == 200:
+        print(f"Smoke session {SMOKE_USER_ID}/{SMOKE_SESSION_ID} already exists")
+        return
+    if existing.status_code not in {404, 422}:
+        _smoke_fail(
+            "Smoke session lookup returned "
+            f"{existing.status_code}, expected 200 or 404. "
+            f"{_snippet(existing, secret)}".rstrip()
+        )
+    created = _request(
+        client,
+        "POST",
+        url,
+        headers=headers,
+        json_body={},
+        timeout=SMOKE_FAST_TIMEOUT_SEC,
+        secret=secret,
+    )
+    if created.status_code == 401:
+        _smoke_fail(
+            f"Smoke session create returned 401. {AUTH_SECRET_ENV} does not match "
+            "the revision. The secret value was not printed."
+        )
+    if created.status_code not in {200, 201, 409}:
+        _smoke_fail(
+            "Smoke session create returned "
+            f"{created.status_code}, expected 200 or 201. "
+            f"{_snippet(created, secret)}".rstrip()
+        )
+    print(f"Smoke session {SMOKE_USER_ID}/{SMOKE_SESSION_ID} is ready")
+
+
+def _expect_answer(client: httpx.Client, url: str, secret: str) -> None:
+    response = _request(
+        client,
+        "POST",
+        url,
+        headers=request_headers(secret),
+        json_body={
+            "appName": ADK_APP_NAME,
+            "userId": SMOKE_USER_ID,
+            "sessionId": SMOKE_SESSION_ID,
+            "newMessage": {"role": "user", "parts": [{"text": SMOKE_MESSAGE}]},
+        },
+        timeout=SMOKE_RUN_TIMEOUT_SEC,
+        secret=secret,
+        attempts=2,
+        retry_timeouts=False,
+    )
+    if response.status_code != 200:
+        _smoke_fail(
+            f"POST /run with {AUTH_HEADER} returned {response.status_code}, "
+            "expected 200 with a non-empty answer. "
+            f"{_snippet(response, secret)}".rstrip()
+        )
+    try:
+        payload = response.json()
+    except ValueError:
+        _smoke_fail("POST /run returned 200 but the body was not JSON.")
+    text = extract_reply_text(payload).strip()
+    if not text:
+        _smoke_fail("POST /run returned 200 but the answer text was empty.")
+    preview = _redact(text.replace("\n", " "), secret)[:80]
+    print(f"Smoke POST /run returned a non-empty answer ({len(text)} chars): {preview}")
+
+
+def _delete_smoke_session(client: httpx.Client, url: str, secret: str) -> None:
+    """Best-effort DELETE. A failure here must not hide a failed chat check."""
+    try:
+        response = client.request(
+            "DELETE",
+            url,
+            headers=request_headers(secret),
+            timeout=SMOKE_FAST_TIMEOUT_SEC,
+        )
+    except Exception as err:
+        print(
+            "Smoke session delete failed "
+            f"({type(err).__name__}: {_redact(str(err), secret)}). "
+            "The chat check already finished."
+        )
+        return
+    if response.status_code in {200, 202, 204}:
+        print(f"Deleted smoke session {SMOKE_USER_ID}/{SMOKE_SESSION_ID}.")
+        return
+    if response.status_code == 404:
+        print(f"Smoke session {SMOKE_USER_ID}/{SMOKE_SESSION_ID} is already gone.")
+        return
+    print(
+        f"Smoke session delete returned {response.status_code}. "
+        "Left the session in place. The chat check already finished."
+    )
+
+
+def _smoke_chat(client: httpx.Client, agent_url: str, secret: str) -> None:
+    urls = smoke_urls(agent_url)
+    _expect_health(client, urls["health"], secret)
+    _expect_unauthorized(client, urls["run"], secret)
+    session_ready = False
+    try:
+        _ensure_smoke_session(client, urls["session"], secret)
+        session_ready = True
+        _expect_answer(client, urls["run"], secret)
+    finally:
+        if session_ready:
+            _delete_smoke_session(client, urls["session"], secret)
+
+
+def _run_post_deploy_smoke(
+    project: str,
+    agent_url: str,
+    *,
+    transport: httpx.BaseTransport | None = None,
+    secret: str | None = None,
+) -> None:
+    token = secret if secret is not None else _access_auth_secret(project)
+    with httpx.Client(transport=transport, timeout=SMOKE_RUN_TIMEOUT_SEC) as client:
+        _smoke_chat(client, agent_url, token)
+    print(
+        "Smoke passed. tea-agent answered. "
+        f"User {SMOKE_USER_ID} is not a Telegram id. "
+        "telegram-integration was not called."
+    )
+
+
+def _smoke_only(project: str, region: str) -> None:
+    print(f"Smoke-only against {AGENT_SERVICE} in {project} ({region}). No deploy.")
+    agent_url = _service_url(project, region, AGENT_SERVICE)
+    print(f"tea-agent URL: {agent_url}")
+    _run_post_deploy_smoke(project, agent_url)
 
 
 def main() -> None:
@@ -555,12 +889,37 @@ def main() -> None:
         action="store_true",
         help="Do not write/restart/check a probe session after --execute.",
     )
+    parser.add_argument(
+        "--skip-smoke",
+        action="store_true",
+        help="Deploy without the tea-agent /health and /run smoke test.",
+    )
+    parser.add_argument(
+        "--smoke-only",
+        action="store_true",
+        help="Run the tea-agent smoke test against the current service. Does not deploy.",
+    )
     args = parser.parse_args()
     project = _project_id(args.project)
-    if not args.execute:
-        _print_plan(project, args.region)
+    if args.smoke_only and args.execute:
+        _fail(
+            "--smoke-only checks the current tea-agent and does not deploy. "
+            "Remove --execute."
+        )
+    if args.smoke_only and args.skip_smoke:
+        _fail("Use either --smoke-only or --skip-smoke.")
+    if args.smoke_only:
+        _smoke_only(project, args.region)
         return
-    _execute(project, args.region, skip_verify=args.skip_verify)
+    if not args.execute:
+        _print_plan(project, args.region, skip_smoke=args.skip_smoke)
+        return
+    _execute(
+        project,
+        args.region,
+        skip_verify=args.skip_verify,
+        skip_smoke=args.skip_smoke,
+    )
 
 
 if __name__ == "__main__":
