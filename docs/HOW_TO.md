@@ -201,7 +201,20 @@ A cheap-path plan looks like this:
 
 ### Execute (explicit approval)
 
+`--execute` uses `--set-env-vars` and replaces the whole `telegram-integration` env block. Export `TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_ADMIN_USER_IDS` again in that shell (semicolons; see [§6.1](#61-closed-beta-allowlist-and-rate-limit)), or the new revision comes up closed with an empty allowlist. The same applies to `TELEGRAM_ALLOWLIST_SECRET` and `TELEGRAM_INVITE_CODE_SECRET` when those mounts are in use.
+
+The account that runs `--execute` needs `roles/secretmanager.secretAccessor` on `TEA_AGENT_AUTH_SECRET` so the smoke test can read it. The Compute Engine default service account already has that binding for the running services; this grant is for the human (or CI identity) invoking `gcloud`. Project Owner already includes it.
+
 ```bash
+gcloud secrets add-iam-policy-binding TEA_AGENT_AUTH_SECRET \
+  --project=gen-lang-client-0393777014 \
+  --member="user:you@example.com" \
+  --role=roles/secretmanager.secretAccessor
+```
+
+```bash
+export TELEGRAM_ALLOWED_USER_IDS='111111;222222;333333;444444;555555'
+export TELEGRAM_ADMIN_USER_IDS='111111'
 uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 --execute
 ```
 
@@ -213,10 +226,32 @@ What `--execute` does:
 4. Skips TEA-14 write/restart/check when there is no Cloud SQL / Agent Engine.
 5. Deploys `telegram-integration` with a placeholder `SERVICE_URL` and the same auth secret (so it can call `tea-agent`).
 6. Updates `SERVICE_URL` to the real Telegram service URL (webhook path `<SERVICE_URL>/<TELEGRAM_BOT_TOKEN>`).
+7. Smoke-tests `tea-agent` only (see below). A failure exits non-zero. The new revision is already serving; do not `/start` until the script prints **Deploy finished**.
 
 `telegram-integration` stays `--allow-unauthenticated` because Telegram’s servers cannot send a Google identity token. `tea-agent` also stays `--allow-unauthenticated` at the proxy; the process returns 401 without `X-Tea-Agent-Token`. `/health` does not require the header (Cloud Run’s default startup probe is TCP and does not send it). Step 6 replaces Telegram env vars only. It does not remove the secret mounted in step 5.
 
 During step 5 the webhook target is briefly `https://google.com`. Do not `/start` until the script prints **Deploy finished**.
+
+### Post-deploy smoke
+
+In-memory sessions mean the old TEA-14 write/restart/check does not run, so step 7 is what checks that chat still works. It calls `tea-agent` only:
+
+1. `GET /health` returns 200.
+2. `POST /run` without `X-Tea-Agent-Token` returns 401.
+3. Creates session `tea-smoke-1` for user `tea-smoke` (not a Telegram id, not `tg-<digits>`).
+4. `POST /run` with the token and the message `Привет` returns a non-empty answer. The token is read with `gcloud secrets versions access latest --secret=TEA_AGENT_AUTH_SECRET` and is not printed.
+5. `DELETE`s that session when the API allows it. A delete that the API refuses does not fail a chat that already answered.
+
+The smoke test does not call `telegram-integration`, does not send a Telegram message, and does not spend `TELEGRAM_RATE_LIMIT_PER_MINUTE` or `TELEGRAM_RATE_LIMIT_PER_DAY`.
+
+Rerun the check without deploying, or skip it:
+
+```bash
+uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 --smoke-only
+uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 --execute --skip-smoke
+```
+
+`--skip-verify` still runs the smoke test. `--skip-smoke` is the switch that turns the chat check off. A passing smoke spends one Gemini request on the shared `GOOGLE_API_KEY` (the message is `Привет`).
 
 ### Switch model without a rebuild
 
@@ -231,7 +266,7 @@ gcloud run services update tea-agent \
 
 In-memory sessions reset on the new revision. Then send a short Telegram message (not a mixed cart) to confirm. A later `--execute` pins the same model because deploy always sets `TEA_AGENT_MODEL`.
 
-Skip the persistence probe even when SQL is attached:
+Skip the persistence probe even when SQL is attached. The smoke test still runs unless you also pass `--skip-smoke`:
 
 ```bash
 uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 --execute --skip-verify
@@ -239,9 +274,9 @@ uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 -
 
 ### After deploy
 
-1. Wait until both services show Ready.
-2. Send `/start` in Telegram (one message; Gemini free tier is tight).
-3. First reply after idle can take 20–30s (cold start). The bot says so.
+1. The script already required `GET /health` 200 and one non-empty `tea-agent` answer, unless you passed `--skip-smoke`.
+2. Send `/start` in Telegram (one message; Gemini free tier is tight). That path is `telegram-integration`, which the smoke test does not call.
+3. First reply after idle can take 20–30s (cold start). The bot says so. With min-instances 1 this should be rare.
 
 ### What a new revision does to users
 
@@ -354,7 +389,123 @@ Memory Bank: if `GOOGLE_CLOUD_AGENT_ENGINE_ID` is absent from tea-agent env, Mem
 gcloud secrets list --project=gen-lang-client-0393777014 --format="value(name)"
 ```
 
-Expect `GOOGLE_API_KEY`, `TELEGRAM_BOT_TOKEN`, and `TEA_AGENT_AUTH_SECRET`. Do not `gcloud secrets versions access` in chat logs.
+Expect `GOOGLE_API_KEY`, `TELEGRAM_BOT_TOKEN`, and `TEA_AGENT_AUTH_SECRET`. Do not `gcloud secrets versions access` in chat logs. The deploy smoke test reads that secret inside the process and does not print it.
+
+---
+
+## 5.1 Alerts (log-based metrics)
+
+Prod used to notice `TEA_QUOTA`, `TEA_AGENT_ERROR`, and HTTP 5xx only when someone read the chat. `scripts/setup_alerting.py` creates the log-based metrics and the alert policies. Dry-run leaves GCP unchanged. `--execute` applies them. It does not deploy Cloud Run.
+
+Region is `europe-central2` (`CLOUD_RUN_REGION` in `telegram_integration/deploy_spec.py`). Pass `--region` if that constant changes.
+
+### What is paged
+
+| Signal | Log | Pilot threshold |
+| --- | --- | --- |
+| `TEA_AGENT_ERROR` | `telegram-integration` line `error_code=TEA_AGENT_ERROR` | any match in 5 minutes |
+| `TEA_QUOTA` | `telegram-integration` line `error_code=TEA_QUOTA` | any match in 5 minutes |
+| `tea-agent` HTTP 5xx | request log `run.googleapis.com/requests`, status 500–599 | more than 2 in 5 minutes |
+| `telegram-integration` HTTP 5xx | same request log for that service | more than 2 in 5 minutes |
+
+`_log_agent_failure` in `telegram_integration/main.py` writes `agent failed for telegram user <id> error_code=<code> status=<status>` with the stdlib format `%(asctime)s %(levelname)s %(name)s: %(message)s`. `TEA_QUOTA` is a warning. `TEA_AGENT_ERROR` is `logger.exception` (ERROR plus a traceback). Cloud Run stores that stdout line in `textPayload`. A JSON line or a `log_struct` record stores the same words in `jsonPayload.message`, and may set `jsonPayload.error_code`. Each TEA_* filter matches all three.
+
+5xx uses the Cloud Run request log, not the application stderr line. One cold-start 503 during a deploy stays under the threshold. Three 5xx responses in five minutes pages. A single free-tier Gemini 429 pages as `TEA_QUOTA` on purpose for this 5-person pilot.
+
+Metric names: `tea_agent_error_count`, `tea_quota_count`, `tea_agent_5xx_count`, `telegram_integration_5xx_count`. Policies are named `TeaBot TEA_AGENT_ERROR`, `TeaBot TEA_QUOTA`, `TeaBot tea-agent 5xx`, and `TeaBot telegram-integration 5xx`. A second `--execute` reuses the email channel and updates a metric or policy only when the filter or threshold drifted.
+
+### One-time IAM and APIs
+
+Project Owner already has these roles. Bind them when the runner is a narrower account. Replace `you@example.com`.
+
+```bash
+PROJECT=gen-lang-client-0393777014
+MEMBER="user:you@example.com"
+
+gcloud services enable logging.googleapis.com monitoring.googleapis.com --project="$PROJECT"
+
+gcloud projects add-iam-policy-binding "$PROJECT" \
+  --member="$MEMBER" \
+  --role=roles/logging.configWriter
+
+gcloud projects add-iam-policy-binding "$PROJECT" \
+  --member="$MEMBER" \
+  --role=roles/monitoring.alertPolicyEditor
+
+gcloud projects add-iam-policy-binding "$PROJECT" \
+  --member="$MEMBER" \
+  --role=roles/monitoring.notificationChannelEditor
+```
+
+`roles/serviceusage.serviceUsageAdmin` is what `gcloud services enable` needs. Owner includes it. `roles/logging.configWriter` creates the log-based metrics. `roles/monitoring.alertPolicyEditor` and `roles/monitoring.notificationChannelEditor` create the policies and the email channel. The script enables the two APIs on `--execute` as well.
+
+Deploy smoke is separate: whoever runs `scripts/deploy_cloud_run.py --execute` or `--smoke-only` needs `roles/secretmanager.secretAccessor` on `TEA_AGENT_AUTH_SECRET` (see [§4](#4-deploy-cloud-run)).
+
+### Apply
+
+```bash
+uv run python scripts/setup_alerting.py \
+  --project=gen-lang-client-0393777014 \
+  --notify-email=you@example.com
+
+uv run python scripts/setup_alerting.py \
+  --project=gen-lang-client-0393777014 \
+  --notify-email=you@example.com \
+  --execute
+```
+
+`TEA_ALERT_EMAIL` is the same address when you omit `--notify-email`.
+
+Google sends a verification link to that inbox. Alerts do not send until the channel is verified:
+
+```bash
+gcloud monitoring channels list \
+  --project=gen-lang-client-0393777014 \
+  --format='table(displayName,labels.email_address,verificationStatus,enabled)'
+```
+
+Expect `verificationStatus` `VERIFIED`.
+
+### Force one TEA_AGENT_ERROR and confirm the alert
+
+This writes a log entry. It does not call the bot, does not spend a rate limit, and does not send Telegram. The text is the same marker the process emits (`error_code=TEA_AGENT_ERROR`); the live line also has a timestamp, `ERROR telegram_integration:`, and usually a traceback.
+
+```bash
+PROJECT=gen-lang-client-0393777014
+REGION=europe-central2
+
+gcloud logging write tea-alert-probe \
+  "agent failed for telegram user 0 error_code=TEA_AGENT_ERROR status=500" \
+  --payload-type=text \
+  --severity=ERROR \
+  --project="$PROJECT" \
+  --resource="type=cloud_run_revision,project_id=${PROJECT},location=${REGION},service_name=telegram-integration,revision_name=alert-probe,configuration_name=alert-probe"
+```
+
+Confirm the entry is visible to the same filter the metric uses:
+
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="telegram-integration" AND resource.labels.location="europe-central2" AND (textPayload:"error_code=TEA_AGENT_ERROR" OR jsonPayload.message:"error_code=TEA_AGENT_ERROR" OR jsonPayload.error_code="TEA_AGENT_ERROR")' \
+  --project="$PROJECT" \
+  --freshness=30m \
+  --limit=5
+```
+
+The metric can lag a couple of minutes. The alert alignment window is 5 minutes, so the mail often arrives within about 10 minutes, and only after the channel is verified.
+
+Optional: prove the `jsonPayload` clause with a second write. That counts as another event (the threshold is already “any”).
+
+```bash
+gcloud logging write tea-alert-probe \
+  '{"message":"agent failed for telegram user 0 error_code=TEA_AGENT_ERROR status=500","error_code":"TEA_AGENT_ERROR"}' \
+  --payload-type=json \
+  --severity=ERROR \
+  --project="$PROJECT" \
+  --resource="type=cloud_run_revision,project_id=${PROJECT},location=${REGION},service_name=telegram-integration,revision_name=alert-probe,configuration_name=alert-probe"
+```
+
+A real chat failure takes the same path: `telegram-integration` calls `tea-agent` `POST /run`, gets a non-quota error, and `logger.exception` writes `error_code=TEA_AGENT_ERROR`. You do not need a broken chat to test the policy.
 
 ---
 
@@ -787,7 +938,10 @@ Then set `GOOGLE_CLOUD_AGENT_ENGINE_ID` (and usually `GOOGLE_CLOUD_AGENT_ENGINE_
 | Local tea-agent HTTP | `uv run uvicorn tea_agent.fast_api_app:app --host 127.0.0.1 --port 8080` |
 | Upsert secrets | `uv run python scripts/setup_secret_manager.py` |
 | Deploy dry-run | `uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014` |
-| Deploy | same + `--execute` |
+| Deploy | same + `--execute` (re-export allowlist ids; smoke runs after) |
+| Smoke only | `uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 --smoke-only` |
+| Alerting dry-run | `uv run python scripts/setup_alerting.py --project=gen-lang-client-0393777014 --notify-email=you@example.com` |
+| Alerting apply | same + `--execute` ([§5.1](#51-alerts-log-based-metrics)) |
 | Switch live model (no rebuild) | `gcloud run services update tea-agent --project=gen-lang-client-0393777014 --region=europe-central2 --update-env-vars=TEA_AGENT_MODEL=gemini-3.1-flash-lite` |
 | Service list | `gcloud run services list --project=gen-lang-client-0393777014 --region=europe-central2` |
 | Logs | `gcloud run services logs read tea-agent --project=gen-lang-client-0393777014 --region=europe-central2 --limit=80` |
@@ -811,6 +965,12 @@ A2A: the FastAPI app exposes A2A routes. Inspector: [A2A Inspector](https://gith
 | Empty or quota replies | AI Studio daily/minute limits; wait, or set `TEA_AGENT_MODEL=gemini-3.6-flash` on a paid tier |
 | First Telegram message hangs | Cold start; wait 30s. With min-instances 1 this should be rare |
 | `--execute` stops on `TEA_AGENT_AUTH_SECRET` | Create the secret first (§2). The script will not invent a value |
+| Smoke: `GET /health` is not 200 | Revision not ready, or the process is crash-looping. Rerun `--smoke-only` after a minute |
+| Smoke: `POST /run` without the header is not 401 | Lockdown missing on this revision. See the curl check in §5 |
+| Smoke: answer text was empty, or `/run` was not 200 | Read `tea-agent` logs. The new revision is already serving |
+| Smoke: could not read `TEA_AGENT_AUTH_SECRET` | Grant `roles/secretmanager.secretAccessor` to the account running the script (§4). The value is not printed |
+| No alert email after a forced `TEA_AGENT_ERROR` | Channel `verificationStatus` is still unverified, or the 5-minute alignment has not closed (§5.1) |
+| Allowlist empty after deploy | `--set-env-vars` replaced the env block. Export `TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_ADMIN_USER_IDS` again (§6.1) |
 | Bot replies «Не удалось открыть сессию…» or «Сбой на стороне сомелье…» and tea-agent logs `rejected tea-agent request` | Auth header missing or the two services have different secret versions |
 | `curl` to tea-agent `/run` returns 200 with no header | Old revision, or `K_SERVICE` and the secret are both unset. Prod must fail closed |
 | Bot works locally, Cloud Run outdated | Need `--execute` after git changes (including `data/*.json`) |
@@ -822,6 +982,7 @@ A2A: the FastAPI app exposes A2A routes. Inspector: [A2A Inspector](https://gith
 ## 13. Safety
 
 - Never commit `.env`, `credentials.json`, or secret values.
-- `--execute` on deploy / Cloud SQL / Memory Bank is explicit approval. Dry-run first.
+- `--execute` on deploy / Cloud SQL / Memory Bank / `scripts/setup_alerting.py` is explicit approval. Dry-run first.
+- The deploy smoke test reads `TEA_AGENT_AUTH_SECRET` and does not print it. Do not pass that value on the command line.
 - Do not change `MODEL` in `tea_agent/agent.py` unless you intend to.
 - Telegram calls `telegram-integration` (webhook). Only that service calls `tea-agent` (`ADK_SERVER_URL`), with header `X-Tea-Agent-Token`. The tea-agent URL is not a public API. Do not commit it. Unauthenticated `/run` and session reads must return 401. `/health` may return 200.

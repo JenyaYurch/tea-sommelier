@@ -464,11 +464,17 @@ def test_execute_verifies_tea_agent_before_telegram(monkeypatch) -> None:
     monkeypatch.setattr(
         mod, "_verify_after_deploy", lambda *args, **kwargs: order.append("verify")
     )
+    monkeypatch.setattr(
+        mod, "_run_post_deploy_smoke", lambda *args, **kwargs: order.append("smoke")
+    )
     mod._execute("demo-proj", "europe-central2")
     assert order.index("iam-wait") < order.index("tea-agent")
     assert order.index("tea-agent") < order.index("verify")
     assert order.index("verify") < order.index(
         "telegram-integration stage 1 (placeholder SERVICE_URL)"
+    )
+    assert order.index("telegram-integration stage 2 (real SERVICE_URL)") < order.index(
+        "smoke"
     )
 
 
@@ -505,6 +511,9 @@ def test_execute_skips_verify_without_persistent_backend(monkeypatch) -> None:
         mod, "_service_url", lambda project, region, service: f"https://{service}.example"
     )
     monkeypatch.setattr(mod, "_verify_after_deploy", no_verify)
+    monkeypatch.setattr(
+        mod, "_run_post_deploy_smoke", lambda *args, **kwargs: order.append("smoke")
+    )
     mod._execute("demo-proj", "europe-central2")
     assert ("secrets", ()) in order
     assert "sql" not in order
@@ -512,6 +521,9 @@ def test_execute_skips_verify_without_persistent_backend(monkeypatch) -> None:
     assert "tea-agent" in order
     assert order.index("tea-agent") < order.index(
         "telegram-integration stage 1 (placeholder SERVICE_URL)"
+    )
+    assert order.index("telegram-integration stage 2 (real SERVICE_URL)") < order.index(
+        "smoke"
     )
 
 
