@@ -41,7 +41,10 @@ async def test_ask_sends_configured_secret_and_omits_it_in_dev(monkeypatch) -> N
         "tea_agent",
         transport=httpx.MockTransport(handler),
     )
-    assert await open_client.ask("tg-1", "tg-sess-1", "hi") == "ok"
+    try:
+        assert await open_client.ask("tg-1", "tg-sess-1", "hi") == "ok"
+    finally:
+        await open_client.aclose()
     assert seen == [None, None]
 
     monkeypatch.setenv("TEA_AGENT_AUTH_SECRET", "from-env")
@@ -60,7 +63,10 @@ async def test_ask_sends_configured_secret_and_omits_it_in_dev(monkeypatch) -> N
         "tea_agent",
         transport=httpx.MockTransport(authed),
     )
-    assert await env_client.ask("tg-1", "tg-sess-1", "hi") == "ok"
+    try:
+        assert await env_client.ask("tg-1", "tg-sess-1", "hi") == "ok"
+    finally:
+        await env_client.aclose()
     assert seen
     assert set(seen) == {"from-env"}
 
@@ -93,6 +99,14 @@ def _client(handler) -> AdkHttpClient:
     )
 
 
+async def _ask(handler, user_id: str, session_id: str, text: str) -> str:
+    client = _client(handler)
+    try:
+        return await client.ask(user_id, session_id, text)
+    finally:
+        await client.aclose()
+
+
 @pytest.mark.asyncio
 async def test_ask_creates_session_then_runs() -> None:
     calls: list[tuple[str, str]] = []
@@ -112,7 +126,7 @@ async def test_ask_creates_session_then_runs() -> None:
             json=[{"content": {"parts": [{"text": "три сорта"}]}}],
         )
 
-    reply = await _client(handler).ask("tg-1", "tg-sess-1", "мягкий")
+    reply = await _ask(handler, "tg-1", "tg-sess-1", "мягкий")
     assert reply == "три сорта"
     assert any(method == "GET" for method, _ in calls)
     assert any(method == "POST" and "/run" in url for method, url in calls)
@@ -140,7 +154,7 @@ async def test_ask_reuses_existing_session_and_does_not_recreate() -> None:
             json=[{"content": {"parts": [{"text": "снова мягкий"}]}}],
         )
 
-    reply = await _client(handler).ask("tg-1", "tg-sess-1", "ещё")
+    reply = await _ask(handler, "tg-1", "tg-sess-1", "ещё")
     assert reply == "снова мягкий"
     assert calls[0] == ("GET", "/apps/tea_agent/users/tg-1/sessions/tg-sess-1")
     assert not any(
@@ -157,7 +171,7 @@ async def test_ask_quota_raises() -> None:
         return httpx.Response(429, text="RESOURCE_EXHAUSTED")
 
     with pytest.raises(AdkQuotaError):
-        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+        await _ask(handler, "tg-1", "tg-sess-1", "hi")
 
 
 @pytest.mark.asyncio
@@ -168,7 +182,7 @@ async def test_ask_server_error() -> None:
         return httpx.Response(503, text="down")
 
     with pytest.raises(AdkUnavailableError) as exc:
-        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+        await _ask(handler, "tg-1", "tg-sess-1", "hi")
     assert exc.value.error_code == TEA_UNAVAILABLE
     assert exc.value.status_code == 503
 
@@ -181,7 +195,7 @@ async def test_ask_quota_sets_error_code() -> None:
         return httpx.Response(429, text="RESOURCE_EXHAUSTED")
 
     with pytest.raises(AdkQuotaError) as exc:
-        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+        await _ask(handler, "tg-1", "tg-sess-1", "hi")
     assert exc.value.error_code == TEA_QUOTA
     assert exc.value.status_code == 429
 
@@ -192,7 +206,7 @@ async def test_session_get_timeout_is_cold_start() -> None:
         raise httpx.ReadTimeout("timed out", request=request)
 
     with pytest.raises(AdkTimeoutError) as exc:
-        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+        await _ask(handler, "tg-1", "tg-sess-1", "hi")
     assert exc.value.error_code == TEA_COLD_START
 
 
@@ -204,7 +218,7 @@ async def test_session_create_timeout_is_cold_start() -> None:
         raise httpx.ReadTimeout("timed out", request=request)
 
     with pytest.raises(AdkTimeoutError) as exc:
-        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+        await _ask(handler, "tg-1", "tg-sess-1", "hi")
     assert exc.value.error_code == TEA_COLD_START
 
 
@@ -216,7 +230,7 @@ async def test_run_timeout_is_timeout_run() -> None:
         raise httpx.ReadTimeout("timed out", request=request)
 
     with pytest.raises(AdkTimeoutError) as exc:
-        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+        await _ask(handler, "tg-1", "tg-sess-1", "hi")
     assert exc.value.error_code == TEA_TIMEOUT_RUN
 
 
@@ -226,7 +240,7 @@ async def test_connect_error_is_unavailable() -> None:
         raise httpx.ConnectError("connection refused", request=request)
 
     with pytest.raises(AdkUnavailableError) as exc:
-        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+        await _ask(handler, "tg-1", "tg-sess-1", "hi")
     assert exc.value.error_code == TEA_UNAVAILABLE
 
 
@@ -238,7 +252,7 @@ async def test_run_500_is_agent_error() -> None:
         return httpx.Response(500, text="boom")
 
     with pytest.raises(AdkClientError) as exc:
-        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+        await _ask(handler, "tg-1", "tg-sess-1", "hi")
     assert exc.value.error_code == TEA_AGENT_ERROR
     assert exc.value.status_code == 500
 
@@ -251,7 +265,7 @@ async def test_run_500_with_resource_exhausted_body_is_quota() -> None:
         return httpx.Response(500, text="_ResourceExhaustedError")
 
     with pytest.raises(AdkQuotaError) as exc:
-        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+        await _ask(handler, "tg-1", "tg-sess-1", "hi")
     assert exc.value.error_code == TEA_QUOTA
 
 
@@ -285,7 +299,7 @@ async def test_run_500_internal_error_reads_session_quota_event() -> None:
         return httpx.Response(500, text="Internal Server Error")
 
     with pytest.raises(AdkQuotaError) as exc:
-        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+        await _ask(handler, "tg-1", "tg-sess-1", "hi")
     assert exc.value.error_code == TEA_QUOTA
     assert exc.value.status_code == 429
     assert gets == 2
@@ -312,7 +326,7 @@ async def test_session_check_500_is_session_failed() -> None:
         return httpx.Response(500, text="session down")
 
     with pytest.raises(AdkClientError) as exc:
-        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+        await _ask(handler, "tg-1", "tg-sess-1", "hi")
     assert exc.value.error_code == TEA_SESSION_FAILED
     assert exc.value.status_code == 500
 
@@ -325,6 +339,212 @@ async def test_session_create_502_is_unavailable() -> None:
         return httpx.Response(502, text="bad gateway")
 
     with pytest.raises(AdkUnavailableError) as exc:
-        await _client(handler).ask("tg-1", "tg-sess-1", "hi")
+        await _ask(handler, "tg-1", "tg-sess-1", "hi")
     assert exc.value.error_code == TEA_UNAVAILABLE
     assert exc.value.status_code == 502
+
+
+def _reply(text: str) -> httpx.Response:
+    return httpx.Response(200, json=[{"content": {"parts": [{"text": text}]}}])
+
+
+@pytest.mark.asyncio
+async def test_one_http_client_is_reused_and_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ask, feedback, and session patch share one client for the process."""
+    created: list[httpx.AsyncClient] = []
+    real_client = httpx.AsyncClient
+
+    class _CountingClient(real_client):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            created.append(self)
+
+    monkeypatch.setattr(
+        "telegram_integration.adk_client.httpx.AsyncClient", _CountingClient
+    )
+    headers_seen: list[str | None] = []
+    gets = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal gets
+        headers_seen.append(request.headers.get(AUTH_HEADER))
+        if request.method == "GET":
+            gets += 1
+            return httpx.Response(200, json={"id": "tg-sess-1"})
+        if request.url.path.endswith("/feedback"):
+            return httpx.Response(200, json={"status": "success"})
+        if request.method == "PATCH":
+            return httpx.Response(200, json={"id": "tg-sess-1"})
+        return _reply("ok")
+
+    client = AdkHttpClient(
+        "https://tea-agent.example",
+        "tea_agent",
+        transport=httpx.MockTransport(handler),
+        auth_secret="sek",
+    )
+    try:
+        assert await client.ask("tg-1", "tg-sess-1", "раз") == "ok"
+        assert await client.ask("tg-1", "tg-sess-1", "два") == "ok"
+        await client.submit_feedback({"log_type": "feedback", "score": 1})
+        await client.patch_session_state("tg-1", "tg-sess-1", {"user:city": "Minsk"})
+        assert len(created) == 1
+        assert client._http is created[0]
+        assert gets == 1
+        assert headers_seen
+        assert set(headers_seen) == {"sek"}
+    finally:
+        await client.aclose()
+    assert created[0].is_closed
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_known_session_skips_lookup_and_retries_once_when_missing() -> None:
+    """A seen session is not looked up again. A wiped session is created once."""
+    gets = 0
+    creates = 0
+    runs = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal gets, creates, runs
+        if request.method == "GET":
+            gets += 1
+            if gets == 1:
+                return httpx.Response(200, json={"id": "tg-sess-1", "events": []})
+            return httpx.Response(404, text='{"detail":"Session not found."}')
+        if request.method == "POST" and request.url.path.endswith(
+            "/sessions/tg-sess-1"
+        ):
+            creates += 1
+            return httpx.Response(201, json={"id": "tg-sess-1"})
+        runs += 1
+        if runs == 3:
+            return httpx.Response(404, json={"detail": "Session not found."})
+        label = "снова" if runs > 3 else "ок"
+        return _reply(label)
+
+    client = _client(handler)
+    try:
+        assert await client.ask("tg-1", "tg-sess-1", "раз") == "ок"
+        assert await client.ask("tg-1", "tg-sess-1", "два") == "ок"
+        assert gets == 1
+        assert creates == 0
+        assert runs == 2
+        assert await client.ask("tg-1", "tg-sess-1", "три") == "снова"
+        assert gets == 2
+        assert creates == 1
+        assert runs == 4
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [
+        (404, '{"detail":"Session not found."}'),
+        (500, "Session not found."),
+    ],
+)
+async def test_missing_session_is_not_retried_more_than_once(
+    status: int, body: str
+) -> None:
+    runs = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal runs
+        if request.method == "GET":
+            return httpx.Response(404, text="Session not found")
+        if request.method == "POST" and request.url.path.endswith(
+            "/sessions/tg-sess-1"
+        ):
+            return httpx.Response(201, json={"id": "tg-sess-1"})
+        runs += 1
+        if runs == 1:
+            return _reply("ок")
+        return httpx.Response(status, text=body)
+
+    client = _client(handler)
+    try:
+        assert await client.ask("tg-1", "tg-sess-1", "раз") == "ок"
+        with pytest.raises(AdkClientError):
+            await client.ask("tg-1", "tg-sess-1", "два")
+        # First ask, then the failing ask: the 404/missing response and one retry.
+        assert runs == 3
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_unavailable_run_does_not_drop_the_session_cache() -> None:
+    gets = 0
+    creates = 0
+    runs = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal gets, creates, runs
+        if request.method == "GET":
+            gets += 1
+            return httpx.Response(200, json={"id": "tg-sess-1"})
+        if request.method == "POST" and request.url.path.endswith(
+            "/sessions/tg-sess-1"
+        ):
+            creates += 1
+            return httpx.Response(201, json={"id": "tg-sess-1"})
+        runs += 1
+        if runs == 2:
+            return httpx.Response(503, text="down")
+        return _reply("ок")
+
+    client = _client(handler)
+    try:
+        assert await client.ask("tg-1", "tg-sess-1", "раз") == "ок"
+        with pytest.raises(AdkUnavailableError):
+            await client.ask("tg-1", "tg-sess-1", "два")
+        assert await client.ask("tg-1", "tg-sess-1", "три") == "ок"
+        assert gets == 1
+        assert creates == 0
+        assert runs == 3
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_patch_retries_once_when_the_cached_session_was_wiped() -> None:
+    gets = 0
+    creates = 0
+    patches = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal gets, creates, patches
+        if request.method == "GET":
+            gets += 1
+            if gets == 1:
+                return httpx.Response(200, json={"id": "tg-sess-1"})
+            return httpx.Response(404, text="Session not found")
+        if request.method == "POST" and request.url.path.endswith(
+            "/sessions/tg-sess-1"
+        ):
+            creates += 1
+            return httpx.Response(201, json={"id": "tg-sess-1"})
+        patches += 1
+        if patches == 3:
+            return httpx.Response(404, json={"detail": "Session not found."})
+        return httpx.Response(200, json={"id": "tg-sess-1", "state": {}})
+
+    client = _client(handler)
+    try:
+        await client.patch_session_state("tg-1", "tg-sess-1", {"user:currency": "EUR"})
+        await client.patch_session_state("tg-1", "tg-sess-1", {"user:currency": "USD"})
+        assert gets == 1
+        assert creates == 0
+        assert patches == 2
+        await client.patch_session_state("tg-1", "tg-sess-1", {"user:currency": "BYN"})
+        assert gets == 2
+        assert creates == 1
+        assert patches == 4
+    finally:
+        await client.aclose()
