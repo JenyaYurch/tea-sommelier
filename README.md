@@ -77,6 +77,8 @@ Full operational guide (local run, Cloud Run deploy, logs, eval, catalog refresh
 
 ## Telegram
 
+Vitrine amounts in the catalog are BYN. `/currency` shows them in EUR (the default), USD, or BYN. No new environment variable. See [docs/HOW_TO.md](docs/HOW_TO.md) §6.4.
+
 Local polling (process must stay running):
 
 ```bash

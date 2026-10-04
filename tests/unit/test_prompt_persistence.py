@@ -1,3 +1,4 @@
+# ruff: noqa: RUF001
 """Prompt must not promise profile persistence the configured backend cannot keep."""
 
 from __future__ import annotations
@@ -20,6 +21,11 @@ _KEPT_RULES = (
     "save_user_location",
     "{user:city?}",
     "магазины рядом",
+    "{user:currency?}",
+    "price_display",
+    "### На витрине",
+    "ExchangeRate-API",
+    "NBRB",
 )
 
 

@@ -417,7 +417,7 @@ A refused user gets a short Russian closed-beta reply. Their text is not sent to
 | `TELEGRAM_RATE_LIMIT_PER_MINUTE` | `4` |
 | `TELEGRAM_RATE_LIMIT_PER_DAY` | `30` (resets at 00:00 UTC) |
 
-`0` on a rate-limit variable turns that bucket off. Any other non-number keeps the default. The minute window is a fixed unix minute (a user can send 4 just before the boundary and 4 just after). Text messages to the sommelier and next-step buttons (мягче, дешевле, купить, магазины рядом, and the rest) both count. `/start` by itself does not. A wrong invite code does, so guessing is capped. 👍, 👎, `/help`, `/city`, `/feedback`, and the follow-up message `/feedback` asks for do not count. A city sent right after `/city` with no argument does not count either.
+`0` on a rate-limit variable turns that bucket off. Any other non-number keeps the default. The minute window is a fixed unix minute (a user can send 4 just before the boundary and 4 just after). Text messages to the sommelier and next-step buttons (мягче, дешевле, купить, магазины рядом, and the rest) both count. `/start` by itself does not. A wrong invite code does, so guessing is capped. 👍, 👎, `/help`, `/city`, `/currency`, `/feedback`, and the follow-up message `/feedback` asks for do not count. A city sent right after `/city` with no argument does not count either.
 
 Five pilot testers at the daily cap are 150 agent calls. Before the 30–50 person beta, lower `TELEGRAM_RATE_LIMIT_PER_DAY` if the shared Gemini key is close to its project quota.
 
@@ -507,7 +507,7 @@ gcloud run services update telegram-integration --project=gen-lang-client-039377
 
 ## 6.2 In-chat feedback
 
-Testers can rate a recommendation and send a note without spending a Gemini call. The allowlist from [§6.1](#61-closed-beta-allowlist-and-rate-limit) still applies. 👍, 👎, `/feedback`, the follow-up those ask for, `/help`, and `/city` do not spend `TELEGRAM_RATE_LIMIT_PER_MINUTE` or `TELEGRAM_RATE_LIMIT_PER_DAY`. Next-step buttons, including «магазины рядом», still do.
+Testers can rate a recommendation and send a note without spending a Gemini call. The allowlist from [§6.1](#61-closed-beta-allowlist-and-rate-limit) still applies. 👍, 👎, `/feedback`, the follow-up those ask for, `/help`, `/city`, and `/currency` do not spend `TELEGRAM_RATE_LIMIT_PER_MINUTE` or `TELEGRAM_RATE_LIMIT_PER_DAY`. Next-step buttons, including «магазины рядом», still do.
 
 | Tester action | What they see | What is stored |
 | --- | --- | --- |
@@ -613,9 +613,40 @@ uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014
 uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 --execute
 ```
 
-`--execute` replaces the whole env block. Export `TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_ADMIN_USER_IDS` again in that shell if the live bot uses them. Nothing new has to be exported for shops or `/city`.
+`--execute` replaces the whole env block. Export `TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_ADMIN_USER_IDS` again in that shell if the live bot uses them. Nothing new has to be exported for shops, `/city`, or `/currency` ([§6.4](#64-vitrine-prices-and-currency)).
 
 A new tea-agent revision drops in-memory session state, including the saved city, the same way it drops the taste profile.
+
+---
+
+## 6.4 Vitrine prices and `/currency`
+
+`find_in_shop` prices come from the teashop.by catalog as `price_from_byn`. The number a tester sees is EUR unless they pick another currency. USD and BYN are the other two. A saved city does not pick the currency, and neither does a budget such as «до 20 евро».
+
+`/currency USD` (also `EUR` or `BYN`, any letter case) stores `currency` on the same in-memory ADK session as the city. `/currency` with no argument sends three inline buttons. The command does not call the model and does not spend a rate-limit token. The allowlist still runs first. `/help` and `/start` mention it.
+
+The bot converts in code, not in the model. National Bank of Belarus is tried first (`https://api.nbrb.by/exrates/rates/{EUR|USD}?parammode=2`, 3 second timeout). If that fails, the keyless fallback is `https://open.er-api.com/v6/latest/EUR` (credited in the reply as ExchangeRate-API). A good quote is kept in the `tea-agent` process for 24 hours, or from 12 hours onward once the calendar day is past the rate date. One failed lookup is not retried for 15 minutes, so a dead host does not stall every tea in the same answer. If both hosts fail, the reply shows the BYN amount only and does not invent a rate.
+
+A price line leads with the chosen currency and keeps the original BYN, the source, and that source's date:
+
+```text
+~7,39 EUR (25,00 BYN, курс NBRB 04.10.2026) — Дунтин Би Ло Чунь
+```
+
+BYN has no conversion: `25,00 BYN — Дунтин Би Ло Чунь`. The block is `### На витрине`. It is teashop.by only. A b2btea card under `### Где рядом` never gets that amount. If `price_from_byn` is missing, that tea has no number.
+
+No new environment variable. Cloud Run does not set a VPC connector or `--vpc-egress`, so `tea-agent` already reaches both hosts on the default internet path. `telegram-integration` does not call them; it only writes the currency onto the session.
+
+Deploy is still the same script. `--execute` replaces the whole env block, so export the allowlist again:
+
+```bash
+export TELEGRAM_ALLOWED_USER_IDS='111111;222222;333333;444444;555555'
+export TELEGRAM_ADMIN_USER_IDS='111111'
+uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014
+uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 --execute
+```
+
+A new tea-agent revision drops the saved currency along with the city and the taste profile.
 
 ---
 
@@ -752,6 +783,7 @@ Then set `GOOGLE_CLOUD_AGENT_ENGINE_ID` (and usually `GOOGLE_CLOUD_AGENT_ENGINE_
 | Add beta testers | [§6.1](#61-closed-beta-allowlist-and-rate-limit) (`TELEGRAM_ALLOWED_USER_IDS`, semicolons) |
 | Read beta feedback | [§6.2](#62-in-chat-feedback) (`jsonPayload.log_type="feedback"` on `tea-agent`) |
 | Local shops / city | [§6.3](#63-local-shops-and-city) (`/city`, no new env) |
+| Vitrine currency | [§6.4](#64-vitrine-prices-and-currency) (`/currency`, no new env) |
 | Local tea-agent HTTP | `uv run uvicorn tea_agent.fast_api_app:app --host 127.0.0.1 --port 8080` |
 | Upsert secrets | `uv run python scripts/setup_secret_manager.py` |
 | Deploy dry-run | `uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014` |

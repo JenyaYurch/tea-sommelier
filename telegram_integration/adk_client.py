@@ -237,7 +237,7 @@ class AdkHttpClient:
         """Merge session state without calling the model.
 
         ADK accepts ``{"state_delta": {...}}`` on the session URL. Used by
-        ``/city`` so a location update does not spend a Gemini turn.
+        ``/city`` and ``/currency`` so a session update does not spend a Gemini turn.
         """
         async with httpx.AsyncClient(
             transport=self._transport,

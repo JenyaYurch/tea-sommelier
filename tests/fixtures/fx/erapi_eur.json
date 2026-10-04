@@ -1,0 +1,16 @@
+{
+  "result": "success",
+  "provider": "https://www.exchangerate-api.com",
+  "documentation": "https://www.exchangerate-api.com/docs/free",
+  "terms_of_use": "https://www.exchangerate-api.com/terms",
+  "time_last_update_unix": 1759536151,
+  "time_last_update_utc": "Sun, 04 Oct 2026 00:02:31 +0000",
+  "time_next_update_unix": 1759622551,
+  "time_next_update_utc": "Mon, 05 Oct 2026 00:02:31 +0000",
+  "base_code": "EUR",
+  "rates": {
+    "EUR": 1,
+    "USD": 1.125133,
+    "BYN": 3.381805
+  }
+}

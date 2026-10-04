@@ -50,6 +50,11 @@ from telegram_integration.city import (
     clear_pending_city,
     maybe_capture_city_text,
 )
+from telegram_integration.currency import (
+    CURRENCY_CALLBACK_PATTERN,
+    currency_cmd,
+    on_currency_callback,
+)
 from telegram_integration.deploy_spec import (
     ADK_APP_NAME,
     is_webhook_mode,
@@ -86,7 +91,7 @@ START_TEXT = (
     "красный, шен/шу пуэр и GABA.\n\n"
     "Напишите вкус (мягкий, без горечи, утро), сорт — Лунцзин, Бай Му Дань, "
     "Дянь Хун, шен пуэр — или пришлите список из заказа.\n\n"
-    "Памятка — /help, город — /city, отзыв — /feedback."
+    "Памятка — /help, город — /city, валюта — /currency, отзыв — /feedback."
 )
 UNAVAILABLE_TEXT = (
     "Сомелье временно недоступен. Попробуйте ещё раз через минуту."
@@ -484,9 +489,13 @@ def _register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("start", start_cmd))
     application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("city", city_cmd))
+    application.add_handler(CommandHandler("currency", currency_cmd))
     application.add_handler(CommandHandler("feedback", feedback_cmd))
     application.add_handler(
         CallbackQueryHandler(on_feedback_callback, pattern=FEEDBACK_CALLBACK_PATTERN)
+    )
+    application.add_handler(
+        CallbackQueryHandler(on_currency_callback, pattern=CURRENCY_CALLBACK_PATTERN)
     )
     application.add_handler(
         CallbackQueryHandler(on_callback, pattern=CALLBACK_PATTERN)

@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
+from google.adk.tools import ToolContext
+
+from tea_agent.currency import annotate_product, currency_from_state
+from tea_agent.fx_rates import current_fx_quote
 from tea_agent.shop_catalog import find_products
 from tea_agent.slug_index import known_tea_slugs, resolve_query
 from tea_agent.tea_support import compact_tea_card, get_json
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_tea(query: str) -> dict[str, Any]:
@@ -168,19 +175,63 @@ def ask_sommelier(question: str) -> dict[str, Any]:
     }
 
 
-def find_in_shop(slug: str = "", query: str = "") -> dict[str, Any]:
-    """Find teashop.by products to buy: price in BYN, availability, product URL.
+def _has_byn_price(row: dict[str, Any]) -> bool:
+    return row.get("price_from_byn") is not None
+
+
+def _price_rows(
+    rows: list[dict[str, Any]], currency: str, quote: Any
+) -> list[dict[str, Any]]:
+    priced: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            priced.append(annotate_product(row, currency, quote))
+        except Exception:
+            logger.warning("price annotation failed", exc_info=True)
+            priced.append(row)
+    return priced
+
+
+def _fx_fields(currency: str, quote: Any, *, needed: bool) -> dict[str, Any]:
+    """Rate metadata for the model. ``fx`` is null when there is nothing to convert."""
+    fields: dict[str, Any] = {"requested_currency": currency, "fx": None}
+    if not needed or currency == "BYN":
+        fields["fx_status"] = "not_needed"
+        return fields
+    if quote is None:
+        fields["fx_status"] = "unavailable"
+        return fields
+    fields["fx_status"] = "ok"
+    fields["fx"] = {
+        "source": quote.source,
+        "byn_per_eur": format(quote.byn_per_eur, "f"),
+        "eur_date": quote.eur_date.isoformat(),
+        "byn_per_usd": format(quote.byn_per_usd, "f"),
+        "usd_date": quote.usd_date.isoformat(),
+    }
+    return fields
+
+
+def find_in_shop(
+    slug: str = "",
+    query: str = "",
+    tool_context: ToolContext | None = None,
+) -> dict[str, Any]:
+    """Find teashop.by products to buy: price, availability, product URL.
 
     Call after resolve_tea / search_teas when recommending teas or when the user
     asks price / where to buy. Prefer slug from resolve_tea; query is a fallback
     Russian product name. Do not invent prices or URLs — only return tool data.
+    ``price_display`` is already converted. Copy that string; do not recompute.
+    Never attach it to a b2btea shop.
 
     Args:
         slug: tea.support slug (preferred), e.g. biluochun.
         query: Free-text shop/product name if slug is unknown.
 
     Returns:
-        Dict with matching shop products including product_url and price_from_byn.
+        Dict with matching shop products including product_url, price_from_byn,
+        and price_display. price_display is null when price_from_byn is missing.
     """
     slug_n = (slug or "").strip()
     query_n = (query or "").strip()
@@ -190,17 +241,27 @@ def find_in_shop(slug: str = "", query: str = "") -> dict[str, Any]:
             "error": "need_slug_or_query",
             "hint": "Pass slug from resolve_tea or a product name query.",
         }
+    state = None if tool_context is None else getattr(tool_context, "state", None)
+    currency = currency_from_state(state)
     products = find_products(slug=slug_n or None, query=query_n or None, limit=5)
     if products:
+        quote = _quote_for(currency, products)
         return {
             "status": "success",
             "slug": slug_n or None,
             "query": query_n or None,
-            "products": products,
+            "products": _price_rows(products, currency, quote),
             "source": "teashop.by local catalog",
+            **_fx_fields(currency, quote, needed=any(_has_byn_price(row) for row in products)),
             "note": (
-                "Prices are from teashop.by (BYN) for in-stock items only. "
-                "Always give the product_url. Do not offer sold-out items as a buy link. "
+                "Prices are teashop.by only. Copy price_display verbatim; do not "
+                "recompute. price_from_byn is the original BYN amount. "
+                "requested_currency is EUR when the user has not chosen one. "
+                "fx.source and the dates are the only rate; never invent another. "
+                "If price_display is null, there is no number. "
+                "If fx_status is unavailable, price_display is BYN only. "
+                "Do not attach this price to a b2btea shop. "
+                "Always give the product_url for in-stock items. "
                 "Taste/terroir facts still come from tea.support tools."
             ),
         }
@@ -213,16 +274,20 @@ def find_in_shop(slug: str = "", query: str = "") -> dict[str, Any]:
     if unavailable:
         kinds = {item.get("availability") for item in unavailable}
         status = "out_of_stock" if kinds == {"out_of_stock"} else "unavailable"
+        quote = _quote_for(currency, unavailable)
         return {
             "status": status,
             "slug": slug_n or None,
             "query": query_n or None,
             "products": [],
-            "unavailable": unavailable,
+            "unavailable": _price_rows(unavailable, currency, quote),
+            **_fx_fields(
+                currency, quote, needed=any(_has_byn_price(row) for row in unavailable)
+            ),
             "hint": (
-                "Catalog matches are not in stock. Do not offer a buy link or "
-                "invent a price. Say that teashop.by currently has no in-stock "
-                "listing for this tea."
+                "Catalog matches are not in stock. Do not offer a buy link. "
+                "If you mention a price, copy price_display and do not invent one. "
+                "Say that teashop.by currently has no in-stock listing for this tea."
             ),
             "source": "teashop.by local catalog",
         }
@@ -231,9 +296,22 @@ def find_in_shop(slug: str = "", query: str = "") -> dict[str, Any]:
         "slug": slug_n or None,
         "query": query_n or None,
         "products": [],
+        "requested_currency": currency,
+        "fx_status": "not_needed",
+        "fx": None,
         "hint": (
             "No teashop.by match in the local catalog. "
             "Recommend the tea by taste/brewing without inventing a price."
         ),
         "source": "teashop.by local catalog",
     }
+
+
+def _quote_for(currency: str, rows: list[dict[str, Any]]) -> Any:
+    if currency == "BYN" or not any(_has_byn_price(row) for row in rows):
+        return None
+    try:
+        return current_fx_quote()
+    except Exception:
+        logger.warning("fx lookup failed", exc_info=True)
+        return None
