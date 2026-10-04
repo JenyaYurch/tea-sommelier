@@ -68,6 +68,9 @@ def test_default_instruction_does_not_promise_restart_survival(
     assert _FALSE_SERVICE_RESTART not in text
     assert "не обещай, что он сохранится" in text
     assert "только память этого процесса" in text
+    assert "___MEMORY_BANK_LINE___" not in text
+    assert "Долгосрочной памяти между сессиями нет" in text
+    assert "Если в контексте есть факты из прошлых сессий" not in text
     for rule in _KEPT_RULES:
         assert rule in text
     assert root_agent.instruction is build_instruction

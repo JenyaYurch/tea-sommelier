@@ -47,7 +47,9 @@ def _otel_to_cloud() -> bool:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from tea_agent.agent import app as adk_app
     from tea_agent.agent import root_agent
+    from tea_agent.memory import log_memory_bank_status
 
+    log_memory_bank_status()
     runner = Runner(
         app=adk_app,
         session_service=await services.ensure_session_store_ready(),
