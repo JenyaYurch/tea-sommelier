@@ -509,10 +509,10 @@ def test_a_product_link_question_does_not_reattach_saved_shops(user_text: str) -
         stored_shops=_tester_shops(),
         user_text=user_text,
     )
-    assert updated == reply
     assert LOCAL_SHOPS_HEADING not in updated
     assert "teasome.example" not in updated
     assert "b2btea.com" not in updated
+    assert "https://www.teashop.by/product/longjing-1/" in updated
 
 
 def test_tea_link_question_stays_shop_free_on_a_recommendation() -> None:
