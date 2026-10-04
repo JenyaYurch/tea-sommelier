@@ -223,7 +223,9 @@ def find_in_shop(
     asks price / where to buy. Prefer slug from resolve_tea; query is a fallback
     Russian product name. Do not invent prices or URLs — only return tool data.
     ``price_display`` is already converted. Copy that string; do not recompute.
-    Never attach it to a b2btea shop.
+    Never attach it to a b2btea shop. Do not write your own stock or availability
+    sentence: out_of_stock and unavailable are marked by reply code. Never say
+    there are no links or prices when another recommended tea is in stock.
 
     Args:
         slug: tea.support slug (preferred), e.g. biluochun.
@@ -286,8 +288,10 @@ def find_in_shop(
             ),
             "hint": (
                 "Catalog matches are not in stock. Do not offer a buy link. "
-                "If you mention a price, copy price_display and do not invent one. "
-                "Say that teashop.by currently has no in-stock listing for this tea."
+                "Do not write your own stock or availability sentence. "
+                "Never say there are no links or prices when another recommended "
+                "tea is in stock. The reply code marks only this tea "
+                "«нет в наличии» and does not add a buy link."
             ),
             "source": "teashop.by local catalog",
         }

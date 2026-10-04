@@ -10,6 +10,9 @@ from tea_agent.next_steps import (
     ACTION_LABELS,
     HEADING,
     SHOP_HITS_KEY,
+    SHOP_MISSES_KEY,
+    VITRINE_NONE_IN_STOCK,
+    VITRINE_PRICE_HEADING,
     attach_next_steps_to_response,
     collect_shop_hits,
     ensure_next_steps,
@@ -29,9 +32,16 @@ LONGJING_SKU3 = "https://www.teashop.by/product/longjingcha/"
 BILUOCHUN_URL = "https://www.teashop.by/product/duntin-bi-lo-chun/"
 ANJI_URL = "https://www.teashop.by/product/anczi-bajcha/"
 BAI_MAO_URL = "https://www.teashop.by/product/baj-mao-xou-snezhnaya-obezyana/"
+FENIX_URL = "https://www.teashop.by/product/zhasminovyj-glaz-feniksa-moli-fen-yan/"
 GUNTIN_URL = "https://www.teashop.by/product/pujer-guntin/"
 LAO_CHA_TOU_URL = "https://www.teashop.by/product/lao-cha-tou-tri-obezjany/"
 FAKE_URL = "https://www.teashop.by/product/totally-invented-tea/"
+EUR_LINE = "~7,39 EUR (25,00 BYN, курс NBRB 04.10.2026)"
+TESTER_DENIAL = (
+    "К сожалению, на текущий момент в наличии на витрине teashop.by "
+    "подходящих позиций нет, поэтому я не могу предоставить прямые ссылки "
+    "на покупку или цены."
+)
 
 
 def _recs_text() -> str:
@@ -317,6 +327,283 @@ def test_after_model_callback_skips_partial() -> None:
         ),
     )
     assert attach_next_steps_to_response(ctx, response) is None  # type: ignore[arg-type]
+
+
+def _priced(name: str, url: str, slug: str) -> dict:
+    return {
+        "product_name": name,
+        "product_url": url,
+        "matched_slug": slug,
+        "availability": "in_stock",
+        "price_from_byn": 25,
+        "price_display": EUR_LINE,
+    }
+
+
+def test_in_stock_links_are_not_cancelled_by_a_general_stock_denial() -> None:
+    """Tester tg-495970882: two real links, then a sentence that denies them."""
+    per_tea = (
+        "Для Бай Мао Хоу я не могу предоставить ссылку и цену: "
+        "на витрине этого сорта нет в наличии."
+    )
+    text = (
+        "1. Лунцзин — мягкий утренний чай.\n"
+        f"[Купить: Лунцзин]({LONGJING_URL})\n"
+        "2. Би Ло Чунь — без горечи.\n"
+        f"[Купить: Би Ло Чунь]({BILUOCHUN_URL})\n"
+        "3. Бай Мао Хоу — светлый вкус.\n"
+        f"[Купить: Бай Мао Хоу]({BAI_MAO_URL})\n"
+        f"{per_tea}\n"
+        f"{TESTER_DENIAL}"
+    )
+    products = [
+        _priced("Си Ху Лун Цзин", LONGJING_URL, "xihu-longjing"),
+        _priced("Дунтин Би Ло Чунь", BILUOCHUN_URL, "biluochun"),
+    ]
+    unavailable = [
+        {
+            "product_name": "Бай Мао Хоу (Белая обезьяна)",
+            "product_url": BAI_MAO_URL,
+            "matched_slug": "bai-mao-hou",
+            "availability": "out_of_stock",
+            "queried_name": "Бай Мао Хоу",
+        }
+    ]
+    updated = ensure_next_steps(text, products, unavailable=unavailable, currency="EUR")
+
+    assert TESTER_DENIAL not in updated
+    assert "прямые ссылки на покупку или цены" not in updated
+    assert per_tea in updated
+    assert LONGJING_URL in updated
+    assert BILUOCHUN_URL in updated
+    assert BAI_MAO_URL not in updated
+    assert EUR_LINE in updated
+    assert VITRINE_NONE_IN_STOCK not in updated
+
+    vitrine = updated.split(VITRINE_PRICE_HEADING, 1)[1].split("###", 1)[0]
+    assert "Бай Мао Хоу" in vitrine
+    for line in vitrine.splitlines():
+        if "Бай Мао" in line:
+            assert "нет в наличии" in line
+            assert "http" not in line
+            assert "EUR" not in line
+        if "Лун Цзин" in line or "Би Ло" in line:
+            assert "нет в наличии" not in line
+    buys = [step for step in parse_next_steps(updated) if step.kind == "buy"]
+    assert [step.url for step in buys] == [LONGJING_URL, BILUOCHUN_URL]
+
+
+def test_no_in_stock_tea_is_said_once_and_has_no_buy_link() -> None:
+    text = (
+        "1. Бай Мао Хоу — мягкий зелёный.\n"
+        "2. Жасминовый Глаз Феникса — цветочный.\n"
+        "3. Люй Чжу — сладкий улун.\n"
+        f"{TESTER_DENIAL}"
+    )
+    unavailable = [
+        {
+            "product_name": "Бай Мао Хоу (Белая обезьяна)",
+            "product_url": BAI_MAO_URL,
+            "matched_slug": "bai-mao-hou",
+            "availability": "out_of_stock",
+        },
+        {
+            "product_name": "Жасминовый Глаз Феникса (Моли Фэн Янь)",
+            "product_url": FENIX_URL,
+            "matched_slug": "moli-feng-yan",
+            "availability": "out_of_stock",
+        },
+    ]
+    updated = ensure_next_steps(text, [], unavailable=unavailable)
+
+    assert updated.count(VITRINE_NONE_IN_STOCK) == 1
+    assert "не могу предоставить" not in updated
+    assert BAI_MAO_URL not in updated
+    assert FENIX_URL not in updated
+    assert "http" not in updated
+    vitrine = updated.split(VITRINE_PRICE_HEADING, 1)[1].split("###", 1)[0]
+    assert vitrine.count("нет в наличии") >= 2
+    for line in vitrine.splitlines():
+        if "Бай Мао" in line or "Феникса" in line or "Моли" in line:
+            assert "нет в наличии" in line
+        if "Люй Чжу" in line:
+            raise AssertionError(line)
+    buys = [step for step in parse_next_steps(updated) if step.kind == "buy"]
+    assert buys
+    assert all(step.url is None for step in buys)
+
+
+def test_collect_shop_hits_remembers_out_of_stock_apart_from_buy_links() -> None:
+    state: dict = {}
+    tool = SimpleNamespace(name="find_in_shop")
+    ctx = SimpleNamespace(state=state)
+    sold_out = collect_shop_hits(
+        tool,  # type: ignore[arg-type]
+        {"slug": "bai-mao-hou", "query": "Бай Мао Хоу"},
+        ctx,  # type: ignore[arg-type]
+        {
+            "status": "out_of_stock",
+            "products": [],
+            "unavailable": [
+                {
+                    "product_name": "Бай Мао Хоу (Белая обезьяна)",
+                    "product_url": BAI_MAO_URL,
+                    "matched_slug": "bai-mao-hou",
+                    "availability": "out_of_stock",
+                }
+            ],
+        },
+    )
+    assert sold_out is None
+    assert state.get(SHOP_HITS_KEY) in (None, [])
+    misses = state[SHOP_MISSES_KEY]
+    assert [item["product_url"] for item in misses] == [BAI_MAO_URL]
+    assert misses[0]["queried_name"] == "Бай Мао Хоу"
+
+    collect_shop_hits(
+        tool,  # type: ignore[arg-type]
+        {"slug": "xihu-longjing"},
+        ctx,  # type: ignore[arg-type]
+        {
+            "status": "success",
+            "products": [
+                {
+                    "product_name": "Си Ху Лун Цзин",
+                    "product_url": LONGJING_URL,
+                    "matched_slug": "xihu-longjing",
+                    "availability": "in_stock",
+                    "price_display": EUR_LINE,
+                }
+            ],
+        },
+    )
+    assert [item["product_url"] for item in state[SHOP_HITS_KEY]] == [LONGJING_URL]
+    assert [item["product_url"] for item in state[SHOP_MISSES_KEY]] == [BAI_MAO_URL]
+
+    collect_shop_hits(
+        tool,  # type: ignore[arg-type]
+        {"query": "Жасминовый Глаз Феникса"},
+        ctx,  # type: ignore[arg-type]
+        {
+            "status": "unavailable",
+            "products": [],
+            "unavailable": [
+                {
+                    "product_name": "Жасминовый Глаз Феникса (Моли Фэн Янь)",
+                    "product_url": FENIX_URL,
+                    "matched_slug": "moli-feng-yan",
+                    "availability": "unknown",
+                }
+            ],
+        },
+    )
+    assert [item["product_url"] for item in state[SHOP_HITS_KEY]] == [LONGJING_URL]
+    assert [item["product_url"] for item in state[SHOP_MISSES_KEY]] == [
+        BAI_MAO_URL,
+        FENIX_URL,
+    ]
+    fenix = state[SHOP_MISSES_KEY][1]
+    assert fenix["queried_name"] == "Жасминовый Глаз Феникса"
+    assert fenix["availability"] != "in_stock"
+
+
+def test_after_model_callback_marks_only_the_sold_out_tea() -> None:
+    state = {
+        SHOP_HITS_KEY: [
+            _priced("Си Ху Лун Цзин", LONGJING_URL, "xihu-longjing"),
+            _priced("Дунтин Би Ло Чунь", BILUOCHUN_URL, "biluochun"),
+        ],
+        SHOP_MISSES_KEY: [
+            {
+                "product_name": "Бай Мао Хоу (Белая обезьяна)",
+                "product_url": BAI_MAO_URL,
+                "matched_slug": "bai-mao-hou",
+                "availability": "out_of_stock",
+            }
+        ],
+    }
+    text = (
+        "1. Лунцзин — мягкий утренний чай.\n"
+        "2. Би Ло Чунь — без горечи.\n"
+        "3. Бай Мао Хоу — светлый вкус.\n\n"
+        f"{TESTER_DENIAL}"
+    )
+    ctx = SimpleNamespace(state=state)
+    response = LlmResponse(
+        content=types.Content(role="model", parts=[types.Part.from_text(text=text)])
+    )
+    updated = attach_next_steps_to_response(ctx, response)  # type: ignore[arg-type]
+    assert updated is not None
+    body = updated.content.parts[0].text
+    assert TESTER_DENIAL not in body
+    assert LONGJING_URL in body
+    assert BILUOCHUN_URL in body
+    assert BAI_MAO_URL not in body
+    assert "Бай Мао Хоу" in body
+    assert "нет в наличии" in body
+
+
+def test_unknown_availability_is_a_stock_note_without_a_buy_link() -> None:
+    text = (
+        "1. Лунцзин — мягкий утренний чай.\n"
+        "2. Би Ло Чунь — без горечи.\n"
+        "3. Бай Мао Хоу — светлый вкус."
+    )
+    updated = ensure_next_steps(
+        text,
+        [
+            _priced("Си Ху Лун Цзин", LONGJING_URL, "xihu-longjing"),
+            _priced("Дунтин Би Ло Чунь", BILUOCHUN_URL, "biluochun"),
+        ],
+        unavailable=[
+            {
+                "product_name": "Бай Мао Хоу (Белая обезьяна)",
+                "product_url": BAI_MAO_URL,
+                "matched_slug": "bai-mao-hou",
+                "availability": "unknown",
+            }
+        ],
+        currency="EUR",
+    )
+    assert BAI_MAO_URL not in updated
+    assert VITRINE_NONE_IN_STOCK not in updated
+    vitrine = updated.split(VITRINE_PRICE_HEADING, 1)[1].split("###", 1)[0]
+    stock_lines = [line for line in vitrine.splitlines() if "Бай Мао" in line]
+    assert stock_lines
+    assert all("нет в наличии" in line and "http" not in line for line in stock_lines)
+    buys = [step for step in parse_next_steps(updated) if step.kind == "buy"]
+    assert BAI_MAO_URL not in [step.url for step in buys]
+    assert LONGJING_URL in [step.url for step in buys]
+
+
+def test_price_block_removes_the_tester_denial_without_a_miss_list() -> None:
+    text = f"{_recs_text()}\n\n{TESTER_DENIAL}"
+    updated = ensure_next_steps(
+        text,
+        [
+            _priced("Си Ху Лун Цзин", LONGJING_URL, "xihu-longjing"),
+            _priced("Дунтин Би Ло Чунь", BILUOCHUN_URL, "biluochun"),
+            _priced("Аньцзи Бай Ча", ANJI_URL, "anji-baicha"),
+        ],
+        currency="EUR",
+    )
+    assert TESTER_DENIAL not in updated
+    assert EUR_LINE in updated
+    assert "нет в наличии" not in updated
+    assert LONGJING_URL in updated
+
+
+def test_in_stock_vitrine_does_not_grow_a_stock_denial() -> None:
+    products = [
+        _priced("Си Ху Лун Цзин", LONGJING_URL, "xihu-longjing"),
+        _priced("Дунтин Би Ло Чунь", BILUOCHUN_URL, "biluochun"),
+        _priced("Аньцзи Бай Ча", ANJI_URL, "anji-baicha"),
+    ]
+    updated = ensure_next_steps(_recs_text(), products, currency="EUR")
+    assert "нет в наличии" not in updated
+    assert VITRINE_NONE_IN_STOCK not in updated
+    assert EUR_LINE in updated
+    assert updated.index(VITRINE_PRICE_HEADING) < updated.index(HEADING)
 
 
 def test_next_steps_quality_metric_pass_and_fail() -> None:

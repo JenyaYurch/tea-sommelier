@@ -252,6 +252,8 @@ def test_find_in_shop_skips_out_of_stock(tmp_path: Path, monkeypatch) -> None:
     assert missing["products"] == []
     assert missing["unavailable"][0]["availability"] == "out_of_stock"
     assert "buy link" in missing["hint"]
+    assert "no in-stock listing" not in missing["hint"]
+    assert "Do not write your own stock" in missing["hint"]
 
 
 def test_find_products_by_query(tmp_path: Path, monkeypatch) -> None:

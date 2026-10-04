@@ -26,6 +26,7 @@ _KEPT_RULES = (
     "### На витрине",
     "ExchangeRate-API",
     "NBRB",
+    "не пиши своё предложение про наличие",
 )
 
 
@@ -71,6 +72,7 @@ def test_default_instruction_does_not_promise_restart_survival(
     assert "___MEMORY_BANK_LINE___" not in text
     assert "Долгосрочной памяти между сессиями нет" in text
     assert "Если в контексте есть факты из прошлых сессий" not in text
+    assert "скажи, что на витрине нет в наличии" not in text
     for rule in _KEPT_RULES:
         assert rule in text
     assert root_agent.instruction is build_instruction
