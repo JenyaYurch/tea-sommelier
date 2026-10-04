@@ -6,10 +6,12 @@ Playground shows this block as text. Telegram (TEA-11) parses it into InlineKeyb
 Canonical block at the end of a recommendation reply:
 
     ### Что дальше
-    [мягче] [дешевле] [без горечи] [подарок] [подробнее]
+    [мягче] [дешевле] [без горечи] [подарок] [подробнее] [магазины рядом]
     [Купить: <name>](<product_url from find_in_shop>)
 
 «Купить» is a markdown link to a teashop.by URL from the local catalog — never invented.
+«магазины рядом» is a separate chip. Shop card and website links come only from
+find_local_shops and are rendered under «### Где рядом», not as «Купить».
 """
 
 from __future__ import annotations
@@ -28,15 +30,22 @@ from google.genai import types
 from tea_agent.shop_catalog import find_products, is_buyable, load_catalog
 from tea_agent.slug_index import fold_text, resolve_query
 
+LOCAL_SHOPS_CHIP = "магазины рядом"
 ACTION_LABELS: tuple[str, ...] = (
     "мягче",
     "дешевле",
     "без горечи",
     "подарок",
     "подробнее",
+    LOCAL_SHOPS_CHIP,
 )
 HEADING = "### Что дальше"
+LOCAL_SHOPS_HEADING = "### Где рядом"
 SHOP_HITS_KEY = "temp:shop_hits_turn"
+LOCAL_SHOPS_KEY = "temp:local_shops_turn"
+_B2BTEA_HOSTS = frozenset({"b2btea.com", "www.b2btea.com"})
+_MARKETPLACE_BITS = ("amazon.", "wildberries.", "ozon.", "aliexpress.")
+_LOCAL_BLOCK = re.compile(r"(?is)\n*###\s*Где рядом\b.*?(?=\n###\s|\Z)")
 _BLOCK_START = re.compile(
     r"(?is)\n*(?:###\s*Что дальше|<!--\s*tea_next_steps\s*-->)\s*"
 )
@@ -187,8 +196,48 @@ def harvest_catalog_products(text: str) -> list[dict[str, Any]]:
     return products
 
 
+def normalize_directory_url(url: str | None) -> str:
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    raw = raw.split("#", 1)[0].split("?", 1)[0].rstrip("/")
+    raw = re.sub(r"^http://", "https://", raw, count=1, flags=re.I)
+    return raw
+
+
+def _is_b2btea_url(url: str | None) -> bool:
+    return urlparse(normalize_directory_url(url)).netloc.lower() in _B2BTEA_HOSTS
+
+
+def _is_marketplace(host: str) -> bool:
+    return any(bit in host for bit in _MARKETPLACE_BITS)
+
+
+def remove_local_shops_section(text: str) -> str:
+    return _LOCAL_BLOCK.sub("\n", text).strip()
+
+
+def _split_local_shops_section(text: str) -> tuple[str, str]:
+    match = _LOCAL_BLOCK.search(text)
+    if not match:
+        return text, ""
+    outside = (text[: match.start()] + text[match.end() :]).strip()
+    return outside, match.group(0)
+
+
 def invented_buy_urls(text: str) -> list[str]:
-    """teashop.by (or other shop) URLs that are not in the local catalog."""
+    """teashop.by (or other shop) URLs that are not in the local catalog.
+
+    b2btea card links and shop websites are allowed only inside the grounded
+    «Где рядом» block. Marketplace hosts are never allowed.
+    """
+    outside, inside = _split_local_shops_section(text)
+    found = _invented_in_chunk(outside, directory_section=False)
+    found.extend(_invented_in_chunk(inside, directory_section=True))
+    return found
+
+
+def _invented_in_chunk(text: str, *, directory_section: bool) -> list[str]:
     found: list[str] = []
     seen: set[str] = set()
     candidates = [url for _, url in _MD_LINK.findall(text)]
@@ -202,6 +251,16 @@ def invented_buy_urls(text: str) -> list[str]:
             found.append(normalized)
             continue
         host = urlparse(normalized).netloc.lower()
+        if host and _is_marketplace(host):
+            seen.add(normalized)
+            found.append(normalized)
+            continue
+        if directory_section:
+            continue
+        if _is_b2btea_url(normalized):
+            seen.add(normalized)
+            found.append(normalized)
+            continue
         if host and host not in _TEASHOP_HOSTS and _looks_like_shop_host(host):
             seen.add(normalized)
             found.append(normalized)
@@ -259,14 +318,101 @@ def products_for_reply(
     return _unique_products_by_url(pool)[:3]
 
 
-def ensure_next_steps(
-    text: str, products: list[dict[str, Any]] | None = None
-) -> str:
-    selected = products_for_reply(text, products)
-    if not should_attach_next_steps(text, selected):
+def format_local_shops_section(payload: dict[str, Any] | None) -> str:
+    """Grounded shop block. Only URLs from the tool payload are included."""
+    if not isinstance(payload, dict):
+        return ""
+    status = payload.get("status")
+    shops = [
+        shop
+        for shop in (payload.get("shops") or [])
+        if isinstance(shop, dict) and shop.get("url") and shop.get("website")
+    ]
+    if status == "success" and shops:
+        label = str(payload.get("class_label_ru") or "этот").strip() or "этот"
+        lines = [
+            LOCAL_SHOPS_HEADING,
+            (
+                f"Класс чая: {label}. Справочник показывает магазины с этим классом, "
+                "не конкретный сорт. Цен на карточках нет."
+            ),
+        ]
+        for shop in shops[:3]:
+            where = "тот же город" if shop.get("same_city") else "онлайн в стране"
+            city = str(shop.get("city") or "").strip()
+            name = str(shop.get("name") or "Магазин").strip() or "Магазин"
+            place = f"{city}, {where}" if city else where
+            lines.append(
+                f"{name} — {place}. "
+                f"[Карточка]({shop['url']}) [Сайт]({shop['website']})"
+            )
+        return "\n".join(lines)
+    if status == "not_found":
+        return (
+            f"{LOCAL_SHOPS_HEADING}\n"
+            "Рядом магазинов с этим классом чая не нашлось. Ссылок нет."
+        )
+    if status == "error":
+        return (
+            f"{LOCAL_SHOPS_HEADING}\n"
+            "Справочник магазинов сейчас недоступен. "
+            "Рекомендация чая от этого не отменяется."
+        )
+    return ""
+
+
+def _local_shop_urls(payload: dict[str, Any] | None) -> set[str]:
+    if not isinstance(payload, dict):
+        return set()
+    urls: set[str] = set()
+    for shop in payload.get("shops") or []:
+        if not isinstance(shop, dict):
+            continue
+        for key in ("url", "website"):
+            value = str(shop.get(key) or "").strip()
+            if value:
+                urls.add(value)
+    return urls
+
+
+def _strip_url_set(text: str, urls: set[str]) -> str:
+    keys = {normalize_directory_url(url) for url in urls if url}
+    if not keys:
         return text
-    body = _strip_invented_shop_links(strip_next_steps_block(text))
-    return f"{body}\n\n{format_next_steps_block(selected)}"
+
+    def _replace_md(match: re.Match[str]) -> str:
+        if normalize_directory_url(match.group(2)) in keys:
+            return match.group(1)
+        return match.group(0)
+
+    cleaned = _MD_LINK.sub(_replace_md, text)
+
+    def _replace_bare(match: re.Match[str]) -> str:
+        if normalize_directory_url(match.group(0)) in keys:
+            return ""
+        return match.group(0)
+
+    return re.sub(r"https?://[^\s)>\]]+", _replace_bare, cleaned)
+
+
+def ensure_next_steps(
+    text: str,
+    products: list[dict[str, Any]] | None = None,
+    local_shops: dict[str, Any] | None = None,
+) -> str:
+    cleaned = remove_local_shops_section(text)
+    selected = products_for_reply(cleaned, products)
+    section = format_local_shops_section(local_shops)
+    if not should_attach_next_steps(cleaned, selected) and not section:
+        return text
+    body = _strip_invented_shop_links(strip_next_steps_block(cleaned))
+    if section:
+        body = _strip_url_set(body, _local_shop_urls(local_shops)).strip()
+    parts = [body]
+    if section:
+        parts.append(section)
+    parts.append(format_next_steps_block(selected))
+    return "\n\n".join(part for part in parts if part)
 
 
 def extract_response_text(response: Any) -> str:
@@ -319,6 +465,53 @@ def collect_shop_hits(
     return None
 
 
+def collect_local_shop_hits(
+    tool: BaseTool, args: dict, tool_context: ToolContext, tool_response: dict
+) -> dict | None:
+    """Remember find_local_shops hits so the reply can only show those URLs."""
+    del args
+    if getattr(tool, "name", "") != "find_local_shops":
+        return None
+    if not isinstance(tool_response, dict):
+        return None
+    shops: list[dict[str, Any]] = []
+    for item in tool_response.get("shops") or []:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        website = str(item.get("website") or "").strip()
+        if not url or not website:
+            continue
+        shops.append(
+            {
+                "slug": item.get("slug"),
+                "name": item.get("name") or "Магазин",
+                "city": item.get("city") or "",
+                "country": item.get("country") or "",
+                "same_city": bool(item.get("same_city")),
+                "url": url,
+                "website": website,
+                "tea_class": item.get("tea_class") or "",
+            }
+        )
+    tool_context.state[LOCAL_SHOPS_KEY] = {
+        "status": tool_response.get("status"),
+        "class_label_ru": tool_response.get("class_label_ru") or "",
+        "tea_class": tool_response.get("tea_class") or "",
+        "shops": shops[:3],
+    }
+    return None
+
+
+def collect_turn_hits(
+    tool: BaseTool, args: dict, tool_context: ToolContext, tool_response: dict
+) -> dict | None:
+    """after_tool_callback for catalog buys and local directory shops."""
+    collect_shop_hits(tool, args, tool_context, tool_response)
+    collect_local_shop_hits(tool, args, tool_context, tool_response)
+    return None
+
+
 def attach_next_steps_to_response(
     callback_context: CallbackContext, llm_response: LlmResponse
 ) -> LlmResponse | None:
@@ -335,7 +528,10 @@ def attach_next_steps_to_response(
         return None
     original = "".join(texts)
     products = list(callback_context.state.get(SHOP_HITS_KEY) or [])
-    updated = ensure_next_steps(original, products)
+    local_shops = callback_context.state.get(LOCAL_SHOPS_KEY)
+    if not isinstance(local_shops, dict):
+        local_shops = None
+    updated = ensure_next_steps(original, products, local_shops=local_shops)
     if updated == original:
         return None
     new_parts: list[types.Part] = []
@@ -528,7 +724,7 @@ def _strip_invented_shop_links(text: str) -> str:
         normalized = normalize_product_url(url)
         if is_catalog_url(normalized):
             return match.group(0)
-        if is_teashop_url(normalized):
+        if is_teashop_url(normalized) or _is_b2btea_url(normalized):
             return label
         host = urlparse(normalized).netloc.lower()
         if host and _looks_like_shop_host(host):
@@ -542,7 +738,7 @@ def _strip_invented_shop_links(text: str) -> str:
         normalized = normalize_product_url(url)
         if is_catalog_url(normalized):
             return url
-        if is_teashop_url(normalized):
+        if is_teashop_url(normalized) or _is_b2btea_url(normalized):
             return ""
         return url
 

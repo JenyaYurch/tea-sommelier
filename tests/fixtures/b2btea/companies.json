@@ -1,0 +1,1119 @@
+{
+  "description": "Synthetic companies payloads for TEA-32. No live network.",
+  "warsaw_green": {
+    "cards": {
+      "biluochun": {
+        "status": "error",
+        "error": "timeout"
+      }
+    },
+    "queries": {
+      "Poland|Warsaw|retail|green": {
+        "lang": "en",
+        "total": 6,
+        "count": 6,
+        "offset": 0,
+        "limit": 10,
+        "plan_limit": 10,
+        "note": "Keyless requests return at most 10 results and no paging.",
+        "items": [
+          {
+            "slug": "alpha-tea",
+            "name": "Alpha Tea",
+            "name_native": "Alpha Tea",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              },
+              {
+                "key": "black",
+                "label": "black",
+                "article": null
+              }
+            ],
+            "china_focus": "strong",
+            "evidence": "live",
+            "website": "https://alpha.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/alpha-tea/",
+            "price": "12 EUR"
+          },
+          {
+            "slug": "beta-partial",
+            "name": "Beta Partial",
+            "name_native": "Beta Partial",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "partial",
+            "evidence": "live",
+            "website": "https://beta.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/beta-partial/"
+          },
+          {
+            "slug": "gamma-noweb",
+            "name": "Gamma No Web",
+            "name_native": "Gamma No Web",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "strong",
+            "evidence": "live",
+            "website": null,
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/gamma-noweb/"
+          },
+          {
+            "slug": "delta-black",
+            "name": "Delta Black Only",
+            "name_native": "Delta Black Only",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              }
+            ],
+            "teas": [
+              {
+                "key": "black",
+                "label": "black",
+                "article": null
+              }
+            ],
+            "china_focus": "strong",
+            "evidence": "live",
+            "website": "https://delta.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/delta-black/"
+          },
+          {
+            "slug": "epsilon-brand",
+            "name": "Epsilon Brand",
+            "name_native": "Epsilon Brand",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "brand",
+                "label": "brand"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "strong",
+            "evidence": "live",
+            "website": "https://epsilon.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/epsilon-brand/"
+          },
+          {
+            "slug": "zeta-leaf",
+            "name": "Zeta Leaf",
+            "name_native": "Zeta Leaf",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              },
+              {
+                "key": "tea_house",
+                "label": "tea_house"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              },
+              {
+                "key": "white",
+                "label": "white",
+                "article": null
+              }
+            ],
+            "china_focus": "core",
+            "evidence": "live",
+            "website": "https://zeta.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/zeta-leaf/"
+          }
+        ],
+        "source": "b2btea.com"
+      },
+      "Poland|Warsaw|tea_house|green": {
+        "lang": "en",
+        "total": 3,
+        "count": 3,
+        "offset": 0,
+        "limit": 10,
+        "plan_limit": 10,
+        "note": "Keyless requests return at most 10 results and no paging.",
+        "items": [
+          {
+            "slug": "zeta-leaf",
+            "name": "Zeta Leaf",
+            "name_native": "Zeta Leaf",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              },
+              {
+                "key": "tea_house",
+                "label": "tea_house"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              },
+              {
+                "key": "white",
+                "label": "white",
+                "article": null
+              }
+            ],
+            "china_focus": "core",
+            "evidence": "live",
+            "website": "https://zeta.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/zeta-leaf/"
+          },
+          {
+            "slug": "eta-room",
+            "name": "Eta Room",
+            "name_native": "Eta Room",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "tea_house",
+                "label": "tea_house"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              },
+              {
+                "key": "oolong",
+                "label": "oolong",
+                "article": null
+              }
+            ],
+            "china_focus": "core",
+            "evidence": "live",
+            "website": "https://eta.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/eta-room/"
+          },
+          {
+            "slug": "weak-house",
+            "name": "Weak House",
+            "name_native": "Weak House",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "tea_house",
+                "label": "tea_house"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "partial",
+            "evidence": "live",
+            "website": "https://weak.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/weak-house/"
+          }
+        ],
+        "source": "b2btea.com"
+      },
+      "Poland|Warsaw|ecommerce|green": {
+        "lang": "en",
+        "total": 1,
+        "count": 1,
+        "offset": 0,
+        "limit": 10,
+        "plan_limit": 10,
+        "note": "Keyless requests return at most 10 results and no paging.",
+        "items": [
+          {
+            "slug": "theta-mail",
+            "name": "Theta Mail",
+            "name_native": "Theta Mail",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "ecommerce",
+                "label": "ecommerce"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "strong",
+            "evidence": "live",
+            "website": "https://theta.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/theta-mail/"
+          }
+        ],
+        "source": "b2btea.com"
+      },
+      "Poland||ecommerce|green": {
+        "lang": "en",
+        "total": 2,
+        "count": 2,
+        "offset": 0,
+        "limit": 10,
+        "plan_limit": 10,
+        "note": "Keyless requests return at most 10 results and no paging.",
+        "items": [
+          {
+            "slug": "iota-krakow",
+            "name": "Iota Krakow",
+            "name_native": "Iota Krakow",
+            "country": "Poland",
+            "city": "Krakow",
+            "types": [
+              {
+                "key": "ecommerce",
+                "label": "ecommerce"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "strong",
+            "evidence": "live",
+            "website": "https://iota.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/iota-krakow/"
+          },
+          {
+            "slug": "theta-mail",
+            "name": "Theta Mail",
+            "name_native": "Theta Mail",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "ecommerce",
+                "label": "ecommerce"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "strong",
+            "evidence": "live",
+            "website": "https://theta.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/theta-mail/"
+          }
+        ],
+        "source": "b2btea.com"
+      }
+    }
+  },
+  "online_fallback": {
+    "cards": {
+      "biluochun": {
+        "status": "error",
+        "error": "timeout"
+      }
+    },
+    "queries": {
+      "Poland|Warsaw|retail|green": {
+        "lang": "en",
+        "total": 2,
+        "count": 2,
+        "offset": 0,
+        "limit": 10,
+        "plan_limit": 10,
+        "note": "Keyless requests return at most 10 results and no paging.",
+        "items": [
+          {
+            "slug": "beta-partial",
+            "name": "Beta Partial",
+            "name_native": "Beta Partial",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "partial",
+            "evidence": "live",
+            "website": "https://beta.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/beta-partial/"
+          },
+          {
+            "slug": "gamma-noweb",
+            "name": "Gamma No Web",
+            "name_native": "Gamma No Web",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "strong",
+            "evidence": "live",
+            "website": null,
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/gamma-noweb/"
+          }
+        ],
+        "source": "b2btea.com"
+      },
+      "Poland|Warsaw|tea_house|green": {
+        "lang": "en",
+        "total": 1,
+        "count": 1,
+        "offset": 0,
+        "limit": 10,
+        "plan_limit": 10,
+        "note": "Keyless requests return at most 10 results and no paging.",
+        "items": [
+          {
+            "slug": "weak-house",
+            "name": "Weak House",
+            "name_native": "Weak House",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "tea_house",
+                "label": "tea_house"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "partial",
+            "evidence": "live",
+            "website": "https://weak.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/weak-house/"
+          }
+        ],
+        "source": "b2btea.com"
+      },
+      "Poland|Warsaw|ecommerce|green": {
+        "lang": "en",
+        "total": 1,
+        "count": 1,
+        "offset": 0,
+        "limit": 10,
+        "plan_limit": 10,
+        "note": "Keyless requests return at most 10 results and no paging.",
+        "items": [
+          {
+            "slug": "kappa-partial",
+            "name": "Kappa Partial",
+            "name_native": "Kappa Partial",
+            "country": "Poland",
+            "city": "Krakow",
+            "types": [
+              {
+                "key": "ecommerce",
+                "label": "ecommerce"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "partial",
+            "evidence": "live",
+            "website": "https://kappa.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/kappa-partial/"
+          }
+        ],
+        "source": "b2btea.com"
+      },
+      "Poland||ecommerce|green": {
+        "lang": "en",
+        "total": 3,
+        "count": 3,
+        "offset": 0,
+        "limit": 10,
+        "plan_limit": 10,
+        "note": "Keyless requests return at most 10 results and no paging.",
+        "items": [
+          {
+            "slug": "iota-krakow",
+            "name": "Iota Krakow",
+            "name_native": "Iota Krakow",
+            "country": "Poland",
+            "city": "Krakow",
+            "types": [
+              {
+                "key": "ecommerce",
+                "label": "ecommerce"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "strong",
+            "evidence": "live",
+            "website": "https://iota.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/iota-krakow/"
+          },
+          {
+            "slug": "mu-warsaw",
+            "name": "Mu Warsaw",
+            "name_native": "Mu Warsaw",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "ecommerce",
+                "label": "ecommerce"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "core",
+            "evidence": "live",
+            "website": "https://mu.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/mu-warsaw/"
+          },
+          {
+            "slug": "kappa-partial",
+            "name": "Kappa Partial",
+            "name_native": "Kappa Partial",
+            "country": "Poland",
+            "city": "Krakow",
+            "types": [
+              {
+                "key": "ecommerce",
+                "label": "ecommerce"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "partial",
+            "evidence": "live",
+            "website": "https://kappa.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/kappa-partial/"
+          }
+        ],
+        "source": "b2btea.com"
+      }
+    }
+  },
+  "red_black": {
+    "cards": {
+      "dianhong-gongfu": {
+        "status": "success",
+        "slug": "dianhong-gongfu",
+        "meta": {
+          "tea_type": "red"
+        },
+        "tea_type": "red"
+      }
+    },
+    "queries": {
+      "Poland|Warsaw|retail|black": {
+        "lang": "en",
+        "total": 1,
+        "count": 1,
+        "offset": 0,
+        "limit": 10,
+        "plan_limit": 10,
+        "note": "Keyless requests return at most 10 results and no paging.",
+        "items": [
+          {
+            "slug": "hong-cha",
+            "name": "Hong Cha Shop",
+            "name_native": "Hong Cha Shop",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              }
+            ],
+            "teas": [
+              {
+                "key": "black",
+                "label": "black",
+                "article": null
+              },
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "strong",
+            "evidence": "live",
+            "website": "https://hong.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/hong-cha/"
+          }
+        ],
+        "source": "b2btea.com"
+      },
+      "Poland|Warsaw|tea_house|black": {
+        "lang": "en",
+        "total": 0,
+        "count": 0,
+        "offset": 0,
+        "limit": 10,
+        "plan_limit": 10,
+        "note": "Keyless requests return at most 10 results and no paging.",
+        "items": [],
+        "source": "b2btea.com"
+      },
+      "Poland|Warsaw|ecommerce|black": {
+        "lang": "en",
+        "total": 0,
+        "count": 0,
+        "offset": 0,
+        "limit": 10,
+        "plan_limit": 10,
+        "note": "Keyless requests return at most 10 results and no paging.",
+        "items": [],
+        "source": "b2btea.com"
+      }
+    }
+  },
+  "empty": {
+    "cards": {
+      "biluochun": {
+        "tea_type": "green",
+        "meta": {
+          "tea_type": "green"
+        },
+        "status": "success"
+      }
+    },
+    "queries": {
+      "Poland|Warsaw|retail|green": {
+        "lang": "en",
+        "total": 0,
+        "count": 0,
+        "offset": 0,
+        "limit": 10,
+        "plan_limit": 10,
+        "note": "Keyless requests return at most 10 results and no paging.",
+        "items": [],
+        "source": "b2btea.com"
+      },
+      "Poland|Warsaw|tea_house|green": {
+        "lang": "en",
+        "total": 0,
+        "count": 0,
+        "offset": 0,
+        "limit": 10,
+        "plan_limit": 10,
+        "note": "Keyless requests return at most 10 results and no paging.",
+        "items": [],
+        "source": "b2btea.com"
+      },
+      "Poland|Warsaw|ecommerce|green": {
+        "lang": "en",
+        "total": 0,
+        "count": 0,
+        "offset": 0,
+        "limit": 10,
+        "plan_limit": 10,
+        "note": "Keyless requests return at most 10 results and no paging.",
+        "items": [],
+        "source": "b2btea.com"
+      },
+      "Poland||ecommerce|green": {
+        "lang": "en",
+        "total": 0,
+        "count": 0,
+        "offset": 0,
+        "limit": 10,
+        "plan_limit": 10,
+        "note": "Keyless requests return at most 10 results and no paging.",
+        "items": [],
+        "source": "b2btea.com"
+      }
+    }
+  },
+  "cap": {
+    "cards": {
+      "biluochun": {
+        "status": "error",
+        "error": "timeout"
+      }
+    },
+    "queries": {
+      "Poland|Warsaw|retail|green": {
+        "lang": "en",
+        "total": 40,
+        "count": 10,
+        "offset": 0,
+        "limit": 10,
+        "plan_limit": 10,
+        "note": "Keyless requests return at most 10 results and no paging.",
+        "items": [
+          {
+            "slug": "capped-0",
+            "name": "Capped 0",
+            "name_native": "Capped 0",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "partial",
+            "evidence": "live",
+            "website": "https://capped-0.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/capped-0/"
+          },
+          {
+            "slug": "capped-1",
+            "name": "Capped 1",
+            "name_native": "Capped 1",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "partial",
+            "evidence": "live",
+            "website": "https://capped-1.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/capped-1/"
+          },
+          {
+            "slug": "capped-2",
+            "name": "Capped 2",
+            "name_native": "Capped 2",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "partial",
+            "evidence": "live",
+            "website": "https://capped-2.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/capped-2/"
+          },
+          {
+            "slug": "capped-3",
+            "name": "Capped 3",
+            "name_native": "Capped 3",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "partial",
+            "evidence": "live",
+            "website": "https://capped-3.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/capped-3/"
+          },
+          {
+            "slug": "capped-4",
+            "name": "Capped 4",
+            "name_native": "Capped 4",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "partial",
+            "evidence": "live",
+            "website": "https://capped-4.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/capped-4/"
+          },
+          {
+            "slug": "capped-5",
+            "name": "Capped 5",
+            "name_native": "Capped 5",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "partial",
+            "evidence": "live",
+            "website": "https://capped-5.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/capped-5/"
+          },
+          {
+            "slug": "capped-6",
+            "name": "Capped 6",
+            "name_native": "Capped 6",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "partial",
+            "evidence": "live",
+            "website": "https://capped-6.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/capped-6/"
+          },
+          {
+            "slug": "capped-7",
+            "name": "Capped 7",
+            "name_native": "Capped 7",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "partial",
+            "evidence": "live",
+            "website": "https://capped-7.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/capped-7/"
+          },
+          {
+            "slug": "capped-8",
+            "name": "Capped 8",
+            "name_native": "Capped 8",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "partial",
+            "evidence": "live",
+            "website": "https://capped-8.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/capped-8/"
+          },
+          {
+            "slug": "capped-9",
+            "name": "Capped 9",
+            "name_native": "Capped 9",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "partial",
+            "evidence": "live",
+            "website": "https://capped-9.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/capped-9/"
+          },
+          {
+            "slug": "eleventh-strong",
+            "name": "Eleventh Strong",
+            "name_native": "Eleventh Strong",
+            "country": "Poland",
+            "city": "Warsaw",
+            "types": [
+              {
+                "key": "retail",
+                "label": "retail"
+              }
+            ],
+            "teas": [
+              {
+                "key": "green",
+                "label": "green",
+                "article": null
+              }
+            ],
+            "china_focus": "strong",
+            "evidence": "live",
+            "website": "https://eleventh.example",
+            "has_phone": false,
+            "summary": "Directory card with no price.",
+            "url": "https://b2btea.com/en/c/eleventh-strong/"
+          }
+        ],
+        "source": "b2btea.com"
+      },
+      "Poland|Warsaw|tea_house|green": {
+        "lang": "en",
+        "total": 0,
+        "count": 0,
+        "offset": 0,
+        "limit": 10,
+        "plan_limit": 10,
+        "note": "Keyless requests return at most 10 results and no paging.",
+        "items": [],
+        "source": "b2btea.com"
+      },
+      "Poland|Warsaw|ecommerce|green": {
+        "lang": "en",
+        "total": 0,
+        "count": 0,
+        "offset": 0,
+        "limit": 10,
+        "plan_limit": 10,
+        "note": "Keyless requests return at most 10 results and no paging.",
+        "items": [],
+        "source": "b2btea.com"
+      },
+      "Poland||ecommerce|green": {
+        "lang": "en",
+        "total": 0,
+        "count": 0,
+        "offset": 0,
+        "limit": 10,
+        "plan_limit": 10,
+        "note": "Keyless requests return at most 10 results and no paging.",
+        "items": [],
+        "source": "b2btea.com"
+      }
+    }
+  }
+}

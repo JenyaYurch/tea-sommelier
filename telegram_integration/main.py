@@ -45,6 +45,11 @@ from telegram_integration.adk_client import (
     AdkHttpClient,
     classify_adk_error,
 )
+from telegram_integration.city import (
+    city_cmd,
+    clear_pending_city,
+    maybe_capture_city_text,
+)
 from telegram_integration.deploy_spec import (
     ADK_APP_NAME,
     is_webhook_mode,
@@ -81,7 +86,7 @@ START_TEXT = (
     "красный, шен/шу пуэр и GABA.\n\n"
     "Напишите вкус (мягкий, без горечи, утро), сорт — Лунцзин, Бай Му Дань, "
     "Дянь Хун, шен пуэр — или пришлите список из заказа.\n\n"
-    "Памятка — /help, отзыв — /feedback."
+    "Памятка — /help, город — /city, отзыв — /feedback."
 )
 UNAVAILABLE_TEXT = (
     "Сомелье временно недоступен. Попробуйте ещё раз через минуту."
@@ -330,6 +335,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not message or not user:
         return
     clear_pending_feedback(context.application.bot_data, user.id)
+    clear_pending_city(context.application.bot_data, user.id)
     gate = get_access_gate(context.application.bot_data)
     code = _start_code(context)
     # Compare the invite code only on /start, and only spend a rate-limit
@@ -374,9 +380,12 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     blocked = _blocked_reply(gate, user.id)
     if blocked is not None:
         clear_pending_feedback(bot_data, user.id)
+        clear_pending_city(bot_data, user.id)
         await message.reply_text(blocked)
         return
     if await maybe_capture_feedback_text(message, user.id, bot_data):
+        return
+    if await maybe_capture_city_text(message, user.id, bot_data):
         return
     decision = gate.consume_rate(user.id)
     if not decision.allowed:
@@ -403,6 +412,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await query.answer()
         return
     clear_pending_feedback(context.application.bot_data, user.id)
+    clear_pending_city(context.application.bot_data, user.id)
     gate = get_access_gate(context.application.bot_data)
     refusal = _turn_block_text(gate, user.id)
     if refusal is not None:
@@ -473,6 +483,7 @@ def _attach_backend(application: Application, *, webhook: bool) -> None:
 def _register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("start", start_cmd))
     application.add_handler(CommandHandler("help", help_cmd))
+    application.add_handler(CommandHandler("city", city_cmd))
     application.add_handler(CommandHandler("feedback", feedback_cmd))
     application.add_handler(
         CallbackQueryHandler(on_feedback_callback, pattern=FEEDBACK_CALLBACK_PATTERN)

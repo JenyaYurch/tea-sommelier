@@ -11,7 +11,7 @@ OUT = Path("artifacts/eval_debug/_summary.json")
 
 TOOL_RE = re.compile(
     r"(resolve_tea|search_teas|get_tea_card|similar_teas|compare_teas|"
-    r"find_in_shop|ask_sommelier|save_taste_profile|onboarding_agent|brewing_agent)"
+    r"find_in_shop|find_local_shops|save_user_location|ask_sommelier|save_taste_profile|onboarding_agent|brewing_agent)"
 )
 
 

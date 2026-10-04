@@ -16,6 +16,10 @@ _KEPT_RULES = (
     "медицинских обещаний",
     "### Что дальше",
     "save_taste_profile",
+    "find_local_shops",
+    "save_user_location",
+    "{user:city?}",
+    "магазины рядом",
 )
 
 

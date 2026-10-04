@@ -158,6 +158,8 @@ LlmAgent на Gemini 2.5 Flash-Lite. Держит диалог, анкету, п
 | `compare_teas` | tea.support `/compare` | «Лунцзин vs Би Ло Чунь» бок-о-бок |
 | `resolve_tea` | локальный slug-словарь (230 чаёв) + `/teas?tea_type=green` | Распознавание русских названий сортов → slug (закрывает слабость `/ask`) |
 | `find_in_shop` | teashop.by каталог (JSON) | Поиск товара по slug/сорту: цена, наличие, URL |
+| `find_local_shops` | tea API `GET /api/v2/companies` (b2btea.com) | До 3 магазинов рядом по классу чая. Не SKU и не цена |
+| `save_user_location` | session state | Город и страна пользователя |
 | `ask_sommelier` | tea.support `/ask` | Fallback, если всё остальное не сработало |
 
 **Слой slug-словаря (230 зелёных чаёв)** — критичен: LLM сначала резолвит название сорта в slug через tool, потом тянет карточку. `/ask` оставляем как fallback.
