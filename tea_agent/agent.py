@@ -26,7 +26,9 @@ from google.genai import types
 from tea_agent.app_utils.session_uri import session_profile_durability
 from tea_agent.brewing_agent import brewing_agent
 from tea_agent.memory import generate_memories_callback
-from tea_agent.next_steps import attach_next_steps_to_response, collect_shop_hits
+from tea_agent.location import save_user_location
+from tea_agent.local_shops import find_local_shops
+from tea_agent.next_steps import attach_next_steps_to_response, collect_turn_hits
 from tea_agent.onboarding_agent import onboarding_agent
 from tea_agent.profile_tools import save_taste_profile
 from tea_agent.tools import (
@@ -78,6 +80,12 @@ ___PROFILE_PERSISTENCE_LINE___
 - liked_teas: {user:liked_teas?}
 - profile_complete: {user:profile_complete?}
 
+Город для магазинов рядом (то же хранилище сессии, что и профиль; если пусто — ещё не назван):
+- city: {user:city?}
+- country: {user:country?}
+- city_label: {user:city_label?}
+- location_prompted: {user:location_prompted?}
+
 Маршрутизация sub-agents:
 - onboarding_agent — ТОЛЬКО если нужен персональный подбор, а в сообщении И в state нет одновременно опыта и вкуса/вайба. Если пользователь уже сказал «новичок» + вкус («мягкий без горечи утром») — НЕ вызывай onboarding: сразу search_teas и 3 рекомендации; при желании save_taste_profile сам. Подарок/покупка с бюджетом («подарок до 20 евро», «что купить») — тоже БЕЗ onboarding: сразу подбери 2–3 популярных сорта с витрины в пределах бюджета через find_in_shop (цены/ссылки только из tool) и предложи уточнить вкус получателя для точного подбора.
 - brewing_agent — вопросы «как заварить», температура, граммовка, проливы, кружка vs гайвань.
@@ -92,6 +100,8 @@ ___PROFILE_PERSISTENCE_LINE___
 6. find_in_shop — витрина teashop.by: цена BYN, наличие, product_url. После resolve_tea передай slug; если slug нет — query с названием (Дянь Хун, GABA, пуэр, Е Шен).
 7. save_taste_profile — сохранить профиль, если пользователь уже дал опыт/вкус без полного онбординга.
 8. ask_sommelier — ТОЛЬКО если остальные tools вернули пусто или ошибку.
+9. find_local_shops(country, city, tea_slug) — справочник магазинов b2btea (GET /api/v2/companies). Это магазин, не SKU и не цена. country и city — английские имена справочника (Poland, Warsaw); если они уже в state, передай их (пустая строка — взять из state). tea_slug — из resolve_tea. Класс чая tool берёт из карточки (red → ключ справочника black; сорт вроде biluochun ищется как green). В ответе говори, что магазин держит этот класс, а не конкретный сорт. До 3 магазинов: сначала тот же город, потом онлайн в этой стране. Ссылки только url карточки и website из tool.
+10. save_user_location(city, country) — запомнить город и страну в сессии. country можно "" для известного города (Варшава, Минск, Warsaw): tool подставит страну. Без геокодера и без точки на карте.
 
 Режим заказа / смешанный список (несколько имён через +, запятую, «заказ», «корзина»):
 - Пройди КАЖДОЕ имя через resolve_tea и find_in_shop (query, если slug нет).
@@ -103,15 +113,18 @@ ___PROFILE_PERSISTENCE_LINE___
 Учитывай сохранённый профиль, если он есть.
 Для каждого рекомендованного сорта вызови find_in_shop(slug=...). В ответе дай кликабельный product_url только если status=success и availability=in_stock; цену называй только из tool (BYN). Если not_found — не выдумывай цену/ссылку, просто порекомендуй сорт. Если status=out_of_stock или unavailable — скажи, что на витрине нет в наличии, и не давай ссылку «Купить».
 Если пользователь хочет купить / подарок с бюджетом — рекомендуй в первую очередь то, что реально есть на витрине: если кандидаты из search_teas вернули not_found, проверь через resolve_tea → find_in_shop ещё 2–3 популярных сорта (не более 5–6 вызовов find_in_shop суммарно) и собери 3 варианта с ценой и ссылкой. Только если витрина совсем пуста — рекомендуй без цен.
-Если спрашивают «сколько стоит / где купить» — resolve_tea → find_in_shop; не бери цену из памяти.
-Вкус/терруар — только tea.support; цена/ссылка — только find_in_shop. Не смешивай.
+Если спрашивают «сколько стоит» или купить на витрине — resolve_tea → find_in_shop; не бери цену из памяти.
+Если спрашивают «где купить рядом», «магазины в моём городе» или жмут чип «магазины рядом» — find_local_shops, не вместо find_in_shop. «Купить» и цена BYN остаются только у teashop.by. Если city и country уже в state — не спрашивай город снова, сразу find_local_shops. Если города нет и location_prompted не true — вызови find_local_shops (он вернёт need_location), один раз спроси город («Варшава» или «Warsaw, Poland»), после ответа save_user_location и снова find_local_shops. Если город уже спрашивали и его всё ещё нет — не повторяй вопрос, предложи /city. Геолокацию Telegram не проси.
+find_local_shops: скажи класс (зелёный, красный, белый, жёлтый, улун, пуэр), не «у них есть именно этот сорт». Цен на карточках справочника нет — не называй. URL только из shops[].url и shops[].website; блок «Где рядом» собирается из tool, не вставляй другие ссылки. status=not_found — скажи, что не нашлось, и ничего не выдумывай. status=error — справочник недоступен; рекомендацию чая и витрину не отменяй.
+Вкус/терруар — только tea.support; цена/ссылка витрины — только find_in_shop; магазины рядом — только find_local_shops. Не смешивай.
 После любых tool-вызовов всегда дай законченный ответ пользователю на русском. Не заканчивай ход пустым сообщением.
 Если в контексте есть факты из прошлых сессий (вкус, сосуд, нелюбимая горечь, любимые сорта) — учитывай их. Не выдумывай предпочтения, которых нет в профиле сессии или в этих фактах. Цены, терруар и заварка — только из tools, не из памяти. Медицинские диагнозы и обещания не запоминай и не используй. Если пользователь просит забыть — не опирайся на старые предпочтения в этом ответе.
 После ровно 3 рекомендаций и после витрины/подарка в конце ответа добавь блок:
 ### Что дальше
-[мягче] [дешевле] [без горечи] [подарок] [подробнее]
+[мягче] [дешевле] [без горечи] [подарок] [подробнее] [магазины рядом]
 и для каждого из этих трёх сортов — markdown-ссылку [Купить: <имя сорта>](<product_url этого сорта из find_in_shop>), только если эта позиция in_stock.
 «Купить» — только product_url того сорта, который назван в ответе, не соседний SKU и не чай из другого поиска. Если not_found, out_of_stock или unavailable — чип [купить] без URL, без выдуманного адреса и без ссылки на отсутствующий товар.
+«магазины рядом» — отдельный чип, это не «Купить» и не цена. Не подставляй в него website магазина.
 Разбор заказа (много позиций) — этот блок с тремя «Купить» не обязателен.
 Не давай медицинских обещаний (лечение, давление, детокс). Кофеин — информационно.
 
@@ -158,12 +171,14 @@ root_agent = Agent(
         similar_teas,
         compare_teas,
         find_in_shop,
+        find_local_shops,
+        save_user_location,
         save_taste_profile,
         ask_sommelier,
         PreloadMemoryTool(),
     ],
     sub_agents=[onboarding_agent, brewing_agent],
-    after_tool_callback=collect_shop_hits,
+    after_tool_callback=collect_turn_hits,
     after_model_callback=attach_next_steps_to_response,
     after_agent_callback=generate_memories_callback,
 )

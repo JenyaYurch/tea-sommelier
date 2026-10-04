@@ -3,12 +3,14 @@
 The agent (TEA-7) ends recommendation replies with:
 
     ### Что дальше
-    [мягче] [дешевле] [без горечи] [подарок] [подробнее]
+    [мягче] [дешевле] [без горечи] [подарок] [подробнее] [магазины рядом]
     [Купить: <name>](<catalog product_url>)
 
 This module strips that block from the visible text and attaches real buttons.
 Action taps send callback_data into the same ADK session as the user's chat.
 «Купить» is a URL button that opens the teashop.by catalog link — never an invented URL.
+«магазины рядом» is a callback chip, separate from «Купить». Directory links stay
+in the message text and are not buy buttons.
 👍 / 👎 use a separate ``tea:f:`` callback so they record feedback and do not call the model.
 """
 

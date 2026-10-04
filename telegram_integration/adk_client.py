@@ -231,6 +231,30 @@ class AdkHttpClient:
         if created.status_code not in {200, 201}:
             _raise_for_status(created.status_code, created.text, scope="session")
 
+    async def patch_session_state(
+        self, user_id: str, session_id: str, state_delta: dict
+    ) -> None:
+        """Merge session state without calling the model.
+
+        ADK accepts ``{"state_delta": {...}}`` on the session URL. Used by
+        ``/city`` so a location update does not spend a Gemini turn.
+        """
+        async with httpx.AsyncClient(
+            transport=self._transport,
+            headers=request_headers(self.auth_secret),
+        ) as client:
+            await self.ensure_session(client, user_id, session_id)
+            response = await _await_adk(
+                client.patch(
+                    self._session_url(user_id, session_id),
+                    json={"state_delta": state_delta},
+                    timeout=SESSION_TIMEOUT_SEC,
+                ),
+                timeout_code=TEA_COLD_START,
+            )
+            if response.status_code not in {200, 201}:
+                _raise_for_status(response.status_code, response.text, scope="session")
+
     async def _raise_for_run_failure(
         self,
         client: httpx.AsyncClient,

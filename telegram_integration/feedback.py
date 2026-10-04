@@ -54,10 +54,14 @@ HELP_TEXT = (
     "шен и шу пуэр, GABA. Напишите вкус (мягкий, без горечи, на утро), "
     "сорт или список из заказа. Можно спросить, как заваривать.\n\n"
     "Под рекомендацией кнопки «мягче», «дешевле», «купить» и другие "
-    "продолжают разговор с сомелье и тратят лимит сообщений.\n"
+    "продолжают разговор с сомелье и тратят лимит сообщений. "
+    "«магазины рядом» — отдельно от «Купить»: магазины в вашем городе, без цены.\n"
     "👍 и 👎 только оценивают этот ответ: сомелье их не читает как вопрос, "
     "лимит не тратится. После 👎 можно одним сообщением написать, что не так, "
     "или нажать «Пропустить».\n\n"
+    "/city Warsaw — запомнить город (можно «Варшава» или «Warsaw, Poland»). "
+    "Без текста команда спросит город. Он хранится в этой сессии. "
+    "/city не тратит лимит и не уходит сомелье как вопрос.\n\n"
     "/feedback и текст — отзыв владельцу (что понравилось или что сломалось). "
     "Без текста команда попросит следующее сообщение; оно тоже не уйдёт сомелье.\n\n"
     "Это закрытая бета. Если бот молчит, напишите владельцу."
@@ -66,6 +70,7 @@ HELP_TEXT = (
 BOT_COMMANDS = (
     ("start", "Начать"),
     ("help", "Памятка"),
+    ("city", "Город"),
     ("feedback", "Отзыв"),
 )
 
@@ -105,6 +110,13 @@ def pop_pending_feedback(
 
 def clear_pending_feedback(bot_data: dict, telegram_user_id: int) -> None:
     pop_pending_feedback(bot_data, telegram_user_id)
+
+
+def _clear_pending_city(bot_data: dict, telegram_user_id: int) -> None:
+    """Local import: city.py imports this module."""
+    from telegram_integration.city import clear_pending_city
+
+    clear_pending_city(bot_data, telegram_user_id)
 
 
 def build_feedback_payload(
@@ -166,7 +178,7 @@ def _message_id(message: Message) -> int | None:
 
 
 async def publish_bot_commands(bot) -> None:
-    """Show /start, /help, and /feedback in the Telegram menu. Failures are logged."""
+    """Show /start, /help, /city, and /feedback in the Telegram menu. Failures are logged."""
     from telegram import BotCommand
 
     try:
@@ -186,6 +198,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     bot_data = context.application.bot_data
     clear_pending_feedback(bot_data, user.id)
+    _clear_pending_city(bot_data, user.id)
     gate = get_access_gate(bot_data)
     if not gate.is_allowed(user.id):
         logger.info("blocked non-allowlisted telegram user %s", user.id)
@@ -203,9 +216,11 @@ async def feedback_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     gate = get_access_gate(bot_data)
     if not gate.is_allowed(user.id):
         clear_pending_feedback(bot_data, user.id)
+        _clear_pending_city(bot_data, user.id)
         logger.info("blocked non-allowlisted telegram user %s", user.id)
         await message.reply_text(gate.denied_text())
         return
+    _clear_pending_city(bot_data, user.id)
     args = getattr(context, "args", None) or []
     text = " ".join(str(part) for part in args).strip()
     if not text:
@@ -277,10 +292,12 @@ async def on_feedback_callback(
     gate = get_access_gate(bot_data)
     if not gate.is_allowed(user.id):
         clear_pending_feedback(bot_data, user.id)
+        _clear_pending_city(bot_data, user.id)
         logger.info("blocked non-allowlisted telegram user %s", user.id)
         await query.answer()
         await message.reply_text(gate.denied_text())
         return
+    _clear_pending_city(bot_data, user.id)
     await query.answer()
     if kind == FEEDBACK_SKIP:
         clear_pending_feedback(bot_data, user.id)

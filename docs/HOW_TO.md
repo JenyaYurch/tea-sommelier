@@ -1,6 +1,6 @@
 # TeaBot how-to: run, deploy, status, and other functions
 
-Operational guide for the Chinese-tea sommelier (Telegram → ADK agent → [tea.support](https://tea.support) facts + [teashop.by](https://teashop.by) prices). Repo commands use `uv`. Do not commit `.env`, tokens, or API keys.
+Operational guide for the Chinese-tea sommelier (Telegram → ADK agent → [tea.support](https://tea.support) facts + [teashop.by](https://teashop.by) prices + [b2btea](https://b2btea.com) shops by city). Repo commands use `uv`. Do not commit `.env`, tokens, or API keys.
 
 Canonical copy in git: this file. Notion copy lives under **TeaBot — запуск AI-сомелье**.
 
@@ -417,7 +417,7 @@ A refused user gets a short Russian closed-beta reply. Their text is not sent to
 | `TELEGRAM_RATE_LIMIT_PER_MINUTE` | `4` |
 | `TELEGRAM_RATE_LIMIT_PER_DAY` | `30` (resets at 00:00 UTC) |
 
-`0` on a rate-limit variable turns that bucket off. Any other non-number keeps the default. The minute window is a fixed unix minute (a user can send 4 just before the boundary and 4 just after). Text messages to the sommelier and next-step buttons (мягче, дешевле, купить, and the rest) both count. `/start` by itself does not. A wrong invite code does, so guessing is capped. 👍, 👎, `/help`, `/feedback`, and the follow-up message those ask for do not count.
+`0` on a rate-limit variable turns that bucket off. Any other non-number keeps the default. The minute window is a fixed unix minute (a user can send 4 just before the boundary and 4 just after). Text messages to the sommelier and next-step buttons (мягче, дешевле, купить, магазины рядом, and the rest) both count. `/start` by itself does not. A wrong invite code does, so guessing is capped. 👍, 👎, `/help`, `/city`, `/feedback`, and the follow-up message `/feedback` asks for do not count. A city sent right after `/city` with no argument does not count either.
 
 Five pilot testers at the daily cap are 150 agent calls. Before the 30–50 person beta, lower `TELEGRAM_RATE_LIMIT_PER_DAY` if the shared Gemini key is close to its project quota.
 
@@ -507,7 +507,7 @@ gcloud run services update telegram-integration --project=gen-lang-client-039377
 
 ## 6.2 In-chat feedback
 
-Testers can rate a recommendation and send a note without spending a Gemini call. The allowlist from [§6.1](#61-closed-beta-allowlist-and-rate-limit) still applies. 👍, 👎, `/feedback`, the follow-up those ask for, and `/help` do not spend `TELEGRAM_RATE_LIMIT_PER_MINUTE` or `TELEGRAM_RATE_LIMIT_PER_DAY`. Next-step buttons still do.
+Testers can rate a recommendation and send a note without spending a Gemini call. The allowlist from [§6.1](#61-closed-beta-allowlist-and-rate-limit) still applies. 👍, 👎, `/feedback`, the follow-up those ask for, `/help`, and `/city` do not spend `TELEGRAM_RATE_LIMIT_PER_MINUTE` or `TELEGRAM_RATE_LIMIT_PER_DAY`. Next-step buttons, including «магазины рядом», still do.
 
 | Tester action | What they see | What is stored |
 | --- | --- | --- |
@@ -591,6 +591,31 @@ gcloud logging read \
 Console: Logging → Logs Explorer, resource Cloud Run Revision, service `tea-agent`, query `jsonPayload.log_type="feedback"`.
 
 This code does not deploy and does not read or change the live webhook. The lines show up after the next approved `--execute`.
+
+---
+
+## 6.3 Local shops and `/city`
+
+Buy links stay teashop.by product pages (`find_in_shop`, chip «Купить»). Shops near the user come from the b2btea directory already on the tea API: `GET https://api.thetea.app/api/v2/companies` (`source: b2btea.com`). A hit is a shop, not a SKU and not a price. The bot does not scrape the b2btea homepage.
+
+`find_local_shops(country, city, tea_slug)` returns at most 3 shops. It keeps `retail`, `tea_house`, and `ecommerce` rows that have a website and `china_focus` of `strong` or `core` (`china_focus` is filtered here; the server ignores that parameter). The tea class comes from the tea card. `red` is queried as directory key `black`. A cultivar such as biluochun is queried as `green`, and the reply says the shop carries that class. Same-city shops come first, then online shops in that country (`type=ecommerce` without a city). Keyless calls stay inside the 10-row cap and do not send `offset`.
+
+Each shown shop has the card URL the API returns (`url`, shaped `https://b2btea.com/{lang}/c/{slug}/`) and the shop `website`. No other shop links. If nothing matches, the bot says so. If the directory times out, the tea recommendation still stands.
+
+The user has no location until they say it. The bot asks for a city once and stores `city` and `country` in the ADK session (the same in-memory session as the taste profile on this pilot — not Cloud SQL). `/city Warsaw`, `/city Варшава`, or `/city Warsaw, Poland` sets it without a Gemini call. `/city` with no argument asks; the next short reply is saved the same way. A tea question after that ask still goes to the sommelier. Common cities supply a country (Warsaw → Poland, Минск → Belarus). There is no Telegram location pin and no geocoding.
+
+The next-step chip «магазины рядом» is separate from «Купить». It calls the model. Only URLs returned by `find_local_shops` are shown.
+
+No new environment variable. Deploy is still:
+
+```bash
+uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014
+uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 --execute
+```
+
+`--execute` replaces the whole env block. Export `TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_ADMIN_USER_IDS` again in that shell if the live bot uses them. Nothing new has to be exported for shops or `/city`.
+
+A new tea-agent revision drops in-memory session state, including the saved city, the same way it drops the taste profile.
 
 ---
 
@@ -726,6 +751,7 @@ Then set `GOOGLE_CLOUD_AGENT_ENGINE_ID` (and usually `GOOGLE_CLOUD_AGENT_ENGINE_
 | Local Telegram | `uv run python -m telegram_integration` |
 | Add beta testers | [§6.1](#61-closed-beta-allowlist-and-rate-limit) (`TELEGRAM_ALLOWED_USER_IDS`, semicolons) |
 | Read beta feedback | [§6.2](#62-in-chat-feedback) (`jsonPayload.log_type="feedback"` on `tea-agent`) |
+| Local shops / city | [§6.3](#63-local-shops-and-city) (`/city`, no new env) |
 | Local tea-agent HTTP | `uv run uvicorn tea_agent.fast_api_app:app --host 127.0.0.1 --port 8080` |
 | Upsert secrets | `uv run python scripts/setup_secret_manager.py` |
 | Deploy dry-run | `uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014` |
