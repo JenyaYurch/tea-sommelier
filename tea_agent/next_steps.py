@@ -15,7 +15,8 @@ find_local_shops and are rendered under «### Где рядом», not as «Ку
 A successful payload is also stored on the session (``local_shops_last``) so a
 later turn can rebuild that same block when the tool does not run again.
 «### На витрине» is the teashop.by price, built from price_display. It is not
-the price of a b2btea shop.
+the price of a b2btea shop. A tea find_in_shop marked out of stock is one line
+in that block («нет в наличии») and never a «Купить» link.
 """
 
 from __future__ import annotations
@@ -50,7 +51,10 @@ HEADING = "### Что дальше"
 LOCAL_SHOPS_HEADING = "### Где рядом"
 VITRINE_PRICE_HEADING = "### На витрине"
 VITRINE_PRICE_NOTE = "Витрина teashop.by. Это не цена магазина рядом."
+VITRINE_OUT_OF_STOCK = "нет в наличии"
+VITRINE_NONE_IN_STOCK = "На витрине teashop.by сейчас нет в наличии подходящих позиций."
 SHOP_HITS_KEY = "temp:shop_hits_turn"
+SHOP_MISSES_KEY = "temp:shop_misses_turn"
 LOCAL_SHOPS_KEY = "temp:local_shops_turn"
 _B2BTEA_HOSTS = frozenset({"b2btea.com", "www.b2btea.com"})
 _MARKETPLACE_BITS = ("amazon.", "wildberries.", "ozon.", "aliexpress.")
@@ -253,8 +257,17 @@ def strip_model_shop_prices(text: str) -> str:
     return cleaned.strip()
 
 
-def format_vitrine_price_section(products: list[dict[str, Any]] | None) -> str:
-    """Grounded teashop.by prices. Lines lead with ``price_display``."""
+def format_vitrine_price_section(
+    products: list[dict[str, Any]] | None,
+    unavailable: list[dict[str, Any]] | None = None,
+) -> str:
+    """Grounded teashop.by prices, plus one «нет в наличии» line per sold-out tea.
+
+    In-stock lines still lead with ``price_display``. Sold-out lines name the
+    tea and do not include a URL or a price. The «не цена магазина рядом» note
+    is included only when at least one price line is shown. When every tea in
+    this block is sold out, one summary line says so.
+    """
     lines: list[str] = []
     seen: set[str] = set()
     for item in products or []:
@@ -262,6 +275,8 @@ def format_vitrine_price_section(products: list[dict[str, Any]] | None) -> str:
             continue
         text = item.get("price_display")
         if not isinstance(text, str) or not text.strip():
+            continue
+        if not is_buyable(item.get("availability")):
             continue
         name = str(item.get("product_name") or "чай").strip() or "чай"
         line = f"{text.strip()} — {name}"
@@ -271,9 +286,28 @@ def format_vitrine_price_section(products: list[dict[str, Any]] | None) -> str:
         lines.append(line)
         if len(lines) >= 3:
             break
-    if not lines:
+    miss_lines: list[str] = []
+    for item in unavailable or []:
+        if not isinstance(item, dict) or item.get("availability") == "in_stock":
+            continue
+        name = str(item.get("product_name") or "чай").strip() or "чай"
+        line = f"{name} — {VITRINE_OUT_OF_STOCK}"
+        if line in seen or "http" in line.lower():
+            continue
+        seen.add(line)
+        miss_lines.append(line)
+        if len(miss_lines) >= 3:
+            break
+    if not lines and not miss_lines:
         return ""
-    return "\n".join([VITRINE_PRICE_HEADING, VITRINE_PRICE_NOTE, *lines])
+    block = [VITRINE_PRICE_HEADING]
+    if lines:
+        block.append(VITRINE_PRICE_NOTE)
+    elif not products:
+        block.append(VITRINE_NONE_IN_STOCK)
+    block.extend(lines)
+    block.extend(miss_lines)
+    return "\n".join(block)
 
 
 def _has_price_display(item: dict[str, Any]) -> bool:
@@ -415,7 +449,7 @@ def products_for_reply(
     """Catalog products for the teas named in this reply (max 3, one SKU each)."""
     pool = _merge_products(
         _allowed_products(products or []),
-        harvest_catalog_products(strip_next_steps_block(text)),
+        _allowed_products(harvest_catalog_products(strip_next_steps_block(text))),
     )
     names = extract_recommended_names(text)
     if names:
@@ -650,6 +684,7 @@ def ensure_next_steps(
     products: list[dict[str, Any]] | None = None,
     local_shops: dict[str, Any] | None = None,
     currency: str | None = None,
+    unavailable: list[dict[str, Any]] | None = None,
     *,
     stored_shops: dict[str, Any] | None = None,
     user_text: str | None = None,
@@ -664,9 +699,15 @@ def ensure_next_steps(
     if _is_success_shop_payload(section_payload) and section:
         cleaned = _strip_free_text_shop_list(cleaned, section_payload)
     selected = fill_price_displays(
-        products_for_reply(cleaned, products), currency
+        [
+            item
+            for item in products_for_reply(cleaned, products)
+            if is_buyable(item.get("availability"))
+        ],
+        currency,
     )
-    price_section = format_vitrine_price_section(selected)
+    misses = _misses_for_reply(cleaned, unavailable, selected)
+    price_section = format_vitrine_price_section(selected, misses)
     if not should_attach_next_steps(cleaned, selected) and not section and not price_section:
         return text
     body = _strip_invented_shop_links(strip_next_steps_block(cleaned))
@@ -674,8 +715,13 @@ def ensure_next_steps(
         body = _strip_free_text_shop_list(body, section_payload)
     if section:
         body = _strip_url_set(body, _local_shop_urls(section_payload)).strip()
+    body = _strip_unbuyable_catalog_links(body)
     if selected:
         body = strip_model_shop_prices(body)
+    if _should_drop_stock_denial(body, selected, price_section):
+        body = _strip_contradicting_stock_claims(
+            body, _tea_names(cleaned, selected, misses)
+        )
     parts = [body]
     if price_section:
         parts.append(price_section)
@@ -719,8 +765,12 @@ def prompt_needs_next_steps(prompt: str) -> bool:
 def collect_shop_hits(
     tool: BaseTool, args: dict, tool_context: ToolContext, tool_response: dict
 ) -> dict | None:
-    """after_tool_callback: remember catalog hits from find_in_shop. Return None."""
-    del args
+    """after_tool_callback: remember catalog hits from find_in_shop. Return None.
+
+    In-stock rows stay on ``SHOP_HITS_KEY`` and can become «Купить» links.
+    ``out_of_stock`` / ``unavailable`` rows stay on ``SHOP_MISSES_KEY`` so the
+    vitrine block can name those teas without a buy link.
+    """
     if getattr(tool, "name", "") != "find_in_shop":
         return None
     if not isinstance(tool_response, dict):
@@ -728,10 +778,17 @@ def collect_shop_hits(
     incoming = _unique_products_by_url(
         _allowed_products(tool_response.get("products") or [])
     )
-    if not incoming:
-        return None
-    existing = list(tool_context.state.get(SHOP_HITS_KEY) or [])
-    tool_context.state[SHOP_HITS_KEY] = _merge_products(existing, incoming)
+    if incoming:
+        existing = list(tool_context.state.get(SHOP_HITS_KEY) or [])
+        tool_context.state[SHOP_HITS_KEY] = _merge_products(existing, incoming)
+        _drop_covered_misses(tool_context, incoming)
+    if tool_response.get("status") in {"out_of_stock", "unavailable"}:
+        notes = _stock_notes(tool_response.get("unavailable") or [], args)
+        if notes:
+            existing_misses = list(tool_context.state.get(SHOP_MISSES_KEY) or [])
+            tool_context.state[SHOP_MISSES_KEY] = _merge_products(
+                existing_misses, notes
+            )
     return None
 
 
@@ -812,6 +869,7 @@ def attach_next_steps_to_response(
         return None
     original = "".join(texts)
     products = list(callback_context.state.get(SHOP_HITS_KEY) or [])
+    misses = list(callback_context.state.get(SHOP_MISSES_KEY) or [])
     local_shops = callback_context.state.get(LOCAL_SHOPS_KEY)
     if not isinstance(local_shops, dict):
         local_shops = None
@@ -825,6 +883,7 @@ def attach_next_steps_to_response(
         products,
         local_shops=local_shops,
         currency=currency_from_state(callback_context.state),
+        unavailable=misses,
         stored_shops=stored,
         user_text=_callback_user_text(callback_context),
     )
@@ -876,7 +935,9 @@ def _buy_markdown_lines(products: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def _allowed_products(products: list[Any]) -> list[dict[str, Any]]:
+def _allowed_products(
+    products: list[Any], *, buyable_only: bool = True
+) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for item in products:
         if not isinstance(item, dict):
@@ -897,7 +958,7 @@ def _allowed_products(products: list[Any]) -> list[dict[str, Any]]:
         normalized["product_name"] = (
             str(normalized.get("product_name") or "").strip() or "чай"
         )
-        if not is_buyable(normalized.get("availability")):
+        if buyable_only and not is_buyable(normalized.get("availability")):
             continue
         out.append(normalized)
     return out
@@ -977,10 +1038,6 @@ def _product_for_recommended_name(
         best = _best_product_name_match(name, found, used_urls)
         if best is not None:
             return best
-        for item in found:
-            url = normalize_product_url(str(item.get("product_url") or ""))
-            if url and url not in used_urls:
-                return item
     return None
 
 
@@ -1075,3 +1132,292 @@ def _looks_like_shop_host(host: str) -> bool:
         "teashop",
     )
     return any(bit in host for bit in shop_bits)
+
+
+def _stock_notes(rows: list[Any], args: dict | None) -> list[dict[str, Any]]:
+    """One non-buyable catalog row per tea from an out-of-stock tool result."""
+    notes = [
+        item
+        for item in _one_per_tea(_allowed_products(rows, buyable_only=False))
+        if not is_buyable(item.get("availability"))
+    ]
+    query = ""
+    slug = ""
+    if isinstance(args, dict):
+        query = str(args.get("query") or "").strip()
+        slug = str(args.get("slug") or "").strip()
+    stamped: list[dict[str, Any]] = []
+    for item in notes:
+        stamped.append(
+            {
+                **item,
+                "queried_name": query or item.get("queried_name") or "",
+                "queried_slug": slug or item.get("queried_slug") or "",
+            }
+        )
+    return stamped
+
+
+def _drop_covered_misses(tool_context: ToolContext, incoming: list[dict[str, Any]]) -> None:
+    existing = list(tool_context.state.get(SHOP_MISSES_KEY) or [])
+    if not existing:
+        return
+    tool_context.state[SHOP_MISSES_KEY] = [
+        item for item in existing if not _covered_by_stock(item, incoming)
+    ]
+
+
+def _one_per_tea(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for item in items:
+        slug = str(item.get("matched_slug") or "").strip().lower()
+        url = normalize_product_url(str(item.get("product_url") or ""))
+        key = slug or url
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
+def _covered_by_stock(miss: dict[str, Any], selected: list[dict[str, Any]]) -> bool:
+    miss_url = normalize_product_url(str(miss.get("product_url") or ""))
+    miss_slug = str(miss.get("matched_slug") or "").strip().lower()
+    for item in selected:
+        url = normalize_product_url(str(item.get("product_url") or ""))
+        if miss_url and url and miss_url == url:
+            return True
+        slug = str(item.get("matched_slug") or "").strip().lower()
+        if miss_slug and slug and miss_slug == slug:
+            return True
+    return False
+
+
+def _misses_for_reply(
+    text: str,
+    unavailable: list[dict[str, Any]] | None,
+    selected: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Sold-out teas named in this reply, skipping any tea that is in stock."""
+    pool = [
+        item
+        for item in _one_per_tea(list(unavailable or []))
+        if isinstance(item, dict)
+        and item.get("availability") != "in_stock"
+        and not _covered_by_stock(item, selected)
+    ]
+    names = extract_recommended_names(text)
+    if names:
+        return _select_misses_for_names(names, pool)
+    return _misses_mentioned_in(text, pool)[:3]
+
+
+def _select_misses_for_names(
+    names: list[str], pool: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    used: set[str] = set()
+    shadows = _name_shadows(pool)
+    for name in names:
+        item = _best_product_name_match(name, shadows, used)
+        if item is None:
+            item = _miss_by_slug(name, pool, used)
+        if item is None:
+            continue
+        original = _pool_item(item, pool)
+        url = normalize_product_url(str(original.get("product_url") or ""))
+        if url:
+            used.add(url)
+        selected.append(original)
+    return selected
+
+
+def _name_shadows(pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    shadows: list[dict[str, Any]] = []
+    for item in pool:
+        shadows.append(item)
+        query = str(item.get("queried_name") or "").strip()
+        if query and fold_text(query) != fold_text(str(item.get("product_name") or "")):
+            shadows.append({**item, "product_name": query})
+    return shadows
+
+
+def _pool_item(item: dict[str, Any], pool: list[dict[str, Any]]) -> dict[str, Any]:
+    url = normalize_product_url(str(item.get("product_url") or ""))
+    for original in pool:
+        if normalize_product_url(str(original.get("product_url") or "")) == url:
+            return original
+    return item
+
+
+def _miss_by_slug(
+    name: str, pool: list[dict[str, Any]], used_urls: set[str]
+) -> dict[str, Any] | None:
+    matches = resolve_query(name, limit=3)
+    if not matches or int(matches[0].get("score") or 0) < 50:
+        return None
+    slugs = [
+        str(row["slug"]) for row in matches if int(row.get("score") or 0) >= 50
+    ]
+    for slug in slugs:
+        for item in pool:
+            item_slug = str(
+                item.get("matched_slug") or item.get("queried_slug") or ""
+            ).strip().lower()
+            url = normalize_product_url(str(item.get("product_url") or ""))
+            if item_slug == slug and url and url not in used_urls:
+                return item
+    return None
+
+
+def _misses_mentioned_in(
+    text: str, pool: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    body = fold_text(strip_next_steps_block(text))
+    return [item for item in pool if _tea_mentioned(item, body)]
+
+
+def _tea_mentioned(item: dict[str, Any], body_folded: str) -> bool:
+    for key in ("product_name", "queried_name"):
+        for part in re.split(r"[()«»]", str(item.get(key) or "")):
+            folded = fold_text(part)
+            if len(folded) >= 6 and folded in body_folded:
+                return True
+    return False
+
+
+def _catalog_url_buyable(url: str) -> bool | None:
+    item = _catalog_items().get(normalize_product_url(url))
+    if item is None:
+        return None
+    return is_buyable(item.get("availability"))
+
+
+def _strip_unbuyable_catalog_links(text: str) -> str:
+    """Drop teashop.by URLs whose catalog row is not in stock."""
+
+    def _replace_md(match: re.Match[str]) -> str:
+        label, url = match.group(1), match.group(2)
+        if _catalog_url_buyable(url) is False:
+            if _BUY_LABEL.match(label.strip()):
+                return ""
+            return label
+        return match.group(0)
+
+    cleaned = _MD_LINK.sub(_replace_md, text)
+
+    def _replace_bare(match: re.Match[str]) -> str:
+        if _catalog_url_buyable(match.group(0)) is False:
+            return ""
+        return match.group(0)
+
+    return re.sub(r"https?://[^\s)>\]]+", _replace_bare, cleaned)
+
+
+def _has_catalog_product_link(text: str) -> bool:
+    for _label, url in _MD_LINK.findall(text):
+        if _catalog_url_buyable(url) is True:
+            return True
+    for url in _BARE_URL.findall(text):
+        if _catalog_url_buyable(url) is True:
+            return True
+    return False
+
+
+def _should_drop_stock_denial(
+    body: str, products: list[dict[str, Any]], price_section: str
+) -> bool:
+    """Strip a blanket 'no links or prices' sentence once the reply offers stock.
+
+    Also strip it when the code line is the one statement that nothing is in
+    stock, so that sentence is not written twice.
+    """
+    if products or _has_catalog_product_link(body):
+        return True
+    if not price_section:
+        return False
+    if re.search(r"\b(?:EUR|USD|BYN)\b", price_section):
+        return True
+    return VITRINE_NONE_IN_STOCK in price_section
+
+
+def _tea_names(
+    text: str,
+    products: list[dict[str, Any]],
+    misses: list[dict[str, Any]],
+) -> list[str]:
+    names = list(extract_recommended_names(text))
+    for item in [*products, *misses]:
+        for key in ("product_name", "queried_name"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                names.append(value)
+    return names
+
+
+def _compact_sentence(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip().lower().replace("ё", "е")
+
+
+def _is_blanket_stock_denial(sentence: str) -> bool:
+    """A general claim that the vitrine has nothing, so links or prices are impossible.
+
+    A note about one named tea is not this sentence. ``teashop.by`` inside the
+    sentence must stay intact; callers split only on ``. `` after masking it.
+    """
+    low = _compact_sentence(sentence)
+    denies_stock = (
+        "подходящих позиций нет" in low
+        or "нет подходящих позиций" in low
+        or ("нет в наличии" in low and "витрин" in low)
+        or ("в наличии" in low and re.search(r"\bнет\b", low) is not None)
+    )
+    denies_offer = (
+        "не могу предоставить" in low and ("ссылк" in low or "цен" in low)
+    ) or (
+        "ссылк" in low
+        and "цен" in low
+        and re.search(r"не могу|не дам|не даю|нет ссыл|ссылок нет", low) is not None
+    )
+    return denies_stock and denies_offer
+
+
+def _named_tea_keys(sentence: str, tea_names: list[str]) -> list[str]:
+    folded = fold_text(sentence)
+    hits: list[str] = []
+    for name in tea_names:
+        for part in re.split(r"[()«»]", str(name)):
+            key = fold_text(part)
+            if len(key) >= 6 and key in folded:
+                hits.append(key)
+                break
+    unique: list[str] = []
+    for key in sorted(hits, key=len, reverse=True):
+        if any(key in kept or kept in key for kept in unique):
+            continue
+        unique.append(key)
+    return unique
+
+
+def _strip_contradicting_stock_claims(text: str, tea_names: list[str]) -> str:
+    """Remove a blanket no-stock / no-links sentence. Keep a one-tea note."""
+    protected = text.replace("teashop.by", "teashop\u2219by")
+    cleaned_lines: list[str] = []
+    for line in protected.split("\n"):
+        if not line.strip():
+            cleaned_lines.append(line)
+            continue
+        kept: list[str] = []
+        for part in re.split(r"(?<=[.!?])\s+", line):
+            sentence = part.replace("teashop\u2219by", "teashop.by").strip()
+            if not sentence:
+                continue
+            if _is_blanket_stock_denial(sentence) and len(
+                _named_tea_keys(sentence, tea_names)
+            ) != 1:
+                continue
+            kept.append(part.strip())
+        cleaned_lines.append(" ".join(kept).strip())
+    result = "\n".join(cleaned_lines).replace("teashop\u2219by", "teashop.by")
+    return re.sub(r"\n{3,}", "\n\n", result).strip()
