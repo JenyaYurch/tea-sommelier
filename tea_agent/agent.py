@@ -45,7 +45,7 @@ from tea_agent.tools import (
     similar_teas,
 )
 
-MODEL = os.environ.get("TEA_AGENT_MODEL", "gemini-3.1-flash-lite")
+MODEL = os.environ.get("TEA_AGENT_MODEL", "gemini-3.6-flash")
 
 _PROFILE_PERSISTENCE_LINES = {
     "persistent": (

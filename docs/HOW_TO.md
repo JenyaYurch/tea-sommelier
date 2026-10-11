@@ -34,7 +34,7 @@ Telegram allows **one** getUpdates client. Do not run local polling while the Cl
 | Telegram service | `telegram-integration` |
 | ADK app name | `tea_agent` |
 | Gemini (local + Cloud Run) | `GOOGLE_GENAI_USE_VERTEXAI=false` (AI Studio, not Vertex) |
-| Model | `gemini-3.1-flash-lite` unless `TEA_AGENT_MODEL` is set |
+| Model | `gemini-3.6-flash` unless `TEA_AGENT_MODEL` is set |
 
 Billing is already attached on this project. Do **not** start a new Free Trial.
 
@@ -68,7 +68,7 @@ Optional:
 
 | Variable | Purpose |
 | --- | --- |
-| `TEA_AGENT_MODEL` | Override model (default `gemini-3.1-flash-lite`; use `gemini-3.6-flash` on a paid Gemini API tier) |
+| `TEA_AGENT_MODEL` | Override model (default `gemini-3.6-flash`; call that id directly) |
 | `GOOGLE_CLOUD_PROJECT` | Used by some eval tooling; a placeholder like `teabot-local-eval` is enough locally |
 | `SESSION_SERVICE_URI` | Local sessions; polling defaults to sqlite `./sessions.db` |
 | `CLOUD_SQL_INSTANCE` | **Do not set** unless you want to pay for Postgres |
@@ -255,13 +255,13 @@ uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 -
 
 ### Switch model without a rebuild
 
-Live `tea-agent` already reads `TEA_AGENT_MODEL` at process start. To move production to lite without `--execute`:
+Live `tea-agent` already reads `TEA_AGENT_MODEL` at process start. A code default of `gemini-3.6-flash` does not change a revision that already has the env var set. Point the live service at that id without `--execute`:
 
 ```bash
 gcloud run services update tea-agent \
   --project=gen-lang-client-0393777014 \
   --region=europe-central2 \
-  --update-env-vars=TEA_AGENT_MODEL=gemini-3.1-flash-lite
+  --update-env-vars=TEA_AGENT_MODEL=gemini-3.6-flash
 ```
 
 In-memory sessions reset on the new revision. Then send a short Telegram message (not a mixed cart) to confirm. A later `--execute` pins the same model because deploy always sets `TEA_AGENT_MODEL`.
@@ -312,7 +312,7 @@ gcloud run services describe telegram-integration --project=gen-lang-client-0393
 
 Confirm:
 
-- `tea-agent` env has `GOOGLE_GENAI_USE_VERTEXAI=false`, `TEA_AGENT_MODEL=gemini-3.1-flash-lite`, `TEA_AGENT_DEV_UI=false`, and, on the cheap path, `TEA_ALLOW_EPHEMERAL_SESSIONS=true`.
+- `tea-agent` env has `GOOGLE_GENAI_USE_VERTEXAI=false`, `TEA_AGENT_MODEL=gemini-3.6-flash`, `TEA_AGENT_DEV_UI=false`, and, on the cheap path, `TEA_ALLOW_EPHEMERAL_SESSIONS=true`.
 - `TEA_AGENT_AUTH_SECRET` is a `secretKeyRef`, not a plaintext `value`, on both services.
 - No `CLOUD_SQL_INSTANCE` and no `GOOGLE_CLOUD_AGENT_ENGINE_ID` unless you opted in.
 - Telegram `ADK_SERVER_URL` equals the tea-agent URL from the describe output. Do not copy that URL into git, Notion, or chat.
@@ -531,7 +531,7 @@ Then start polling. Do not paste the token into tickets or commits.
 | User-visible (RU) | Typical cause |
 | --- | --- |
 | Сомелье сейчас запускается… | Cloud Run cold start |
-| Сейчас упёрлись в лимит бесплатного Gemini… | AI Studio quota (flash-lite is higher RPD than flash; still per project) |
+| Сейчас упёрлись в лимит бесплатного Gemini… | AI Studio quota (per project; model is `gemini-3.6-flash`) |
 | Запрос слишком долгий… | `/run` timeout (120s) |
 | Сомелье временно недоступен… | Generic HTTP/agent failure |
 | Бот сейчас в закрытой бете… | Telegram user is not on the allowlist, not an admin, and has not redeemed the invite code in this process |
@@ -839,7 +839,7 @@ If `agents-cli eval grade` fails with missing `google.adk`, grade with the same 
 uv run python scripts/grade_traces_local.py artifacts/traces/<traces-file>.json
 ```
 
-Judge uses `gemini-3.5-flash` with a `gemini-3.1-flash-lite` fallback so it does not share the agent’s daily quota.
+Judge calls `gemini-3.6-flash` directly (same id as the agent default). Gemini 3.5 Flash is deprecated.
 
 ### Other eval commands
 
@@ -924,7 +924,7 @@ Then set `GOOGLE_CLOUD_AGENT_ENGINE_ID` (and usually `GOOGLE_CLOUD_AGENT_ENGINE_
 
 Startup logs one line (`tea_agent.memory`): `Memory Bank: off (GOOGLE_CLOUD_AGENT_ENGINE_ID unset)` or `Memory Bank: on (GOOGLE_CLOUD_AGENT_ENGINE_ID is set)`.
 
-To confirm per-turn prompt tokens dropped on the cheap path, send two short messages in one Telegram chat after the new revision. In Cloud Trace, open the second turn's span `generate_content <TEA_AGENT_MODEL>` (today `generate_content gemini-3.1-flash-lite`) and read `gen_ai.usage.input_tokens`. Before this gate, `PreloadMemoryTool` inserted a `<PAST_CONVERSATIONS>` user turn copied from the same session, so that attribute counted the chat twice. After, the request has no `PAST_CONVERSATIONS` (also visible on `gen_ai.input.messages` when the trace keeps content). There is no `execute_tool preload_memory` span in either revision: ADK runs this tool while building the model request, not as a function call. The parent span `invoke_agent tea_sommelier` carries the same token totals when experimental telemetry is on. A local trace from `agents-cli eval generate` should likewise contain neither `PAST_CONVERSATIONS` nor `preload_memory` when the engine id is unset.
+To confirm per-turn prompt tokens dropped on the cheap path, send two short messages in one Telegram chat after the new revision. In Cloud Trace, open the second turn's span `generate_content <TEA_AGENT_MODEL>` (today `generate_content gemini-3.6-flash`) and read `gen_ai.usage.input_tokens`. Before this gate, `PreloadMemoryTool` inserted a `<PAST_CONVERSATIONS>` user turn copied from the same session, so that attribute counted the chat twice. After, the request has no `PAST_CONVERSATIONS` (also visible on `gen_ai.input.messages` when the trace keeps content). There is no `execute_tool preload_memory` span in either revision: ADK runs this tool while building the model request, not as a function call. The parent span `invoke_agent tea_sommelier` carries the same token totals when experimental telemetry is on. A local trace from `agents-cli eval generate` should likewise contain neither `PAST_CONVERSATIONS` nor `preload_memory` when the engine id is unset.
 
 ---
 
@@ -948,7 +948,7 @@ To confirm per-turn prompt tokens dropped on the cheap path, send two short mess
 | Smoke only | `uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 --smoke-only` |
 | Alerting dry-run | `uv run python scripts/setup_alerting.py --project=gen-lang-client-0393777014 --notify-email=you@example.com` |
 | Alerting apply | same + `--execute` ([§5.1](#51-alerts-log-based-metrics)) |
-| Switch live model (no rebuild) | `gcloud run services update tea-agent --project=gen-lang-client-0393777014 --region=europe-central2 --update-env-vars=TEA_AGENT_MODEL=gemini-3.1-flash-lite` |
+| Switch live model (no rebuild) | `gcloud run services update tea-agent --project=gen-lang-client-0393777014 --region=europe-central2 --update-env-vars=TEA_AGENT_MODEL=gemini-3.6-flash` |
 | Service list | `gcloud run services list --project=gen-lang-client-0393777014 --region=europe-central2` |
 | Logs | `gcloud run services logs read tea-agent --project=gen-lang-client-0393777014 --region=europe-central2 --limit=80` |
 | Rebuild slug index | `uv run python scripts/build_tea_slugs.py` |
@@ -968,7 +968,7 @@ A2A: the FastAPI app exposes A2A routes. Inspector: [A2A Inspector](https://gith
 | Dry-run says CREATE Cloud SQL | Old script; current cheap path must say in-memory / will not create |
 | tea-agent crash loop, “persistent ADK session backend” | Missing `TEA_ALLOW_EPHEMERAL_SESSIONS` and no Cloud SQL / engine id |
 | Telegram conflict / getUpdates | Webhook + polling together; see §6 |
-| Empty or quota replies | AI Studio daily/minute limits; wait, or set `TEA_AGENT_MODEL=gemini-3.6-flash` on a paid tier |
+| Empty or quota replies | AI Studio daily/minute limits; wait. Default model is `gemini-3.6-flash` (`TEA_AGENT_MODEL`) |
 | First Telegram message hangs | Cold start; wait 30s. With min-instances 1 this should be rare |
 | `--execute` stops on `TEA_AGENT_AUTH_SECRET` | Create the secret first (§2). The script will not invent a value |
 | Smoke: `GET /health` is not 200 | Revision not ready, or the process is crash-looping. Rerun `--smoke-only` after a minute |
