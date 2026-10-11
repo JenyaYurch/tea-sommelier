@@ -88,40 +88,37 @@ def evaluate(instance):
     client = genai.Client(
         http_options=types.HttpOptions(timeout=90_000)
     )  # AI Studio (GEMINI_API_KEY) or Agent Platform (ADC)
-    # Judge models; the agent under test runs gemini-3.1-flash-lite. Kept off
-    # the agent's model so judge calls don't share its free-tier daily quota.
-    # Fallback: flash-lite when the primary judge is overloaded (503 spikes).
+    # Call gemini-3.6-flash directly. Gemini 3.5 Flash is deprecated
+    # (auto-redirected). Retries cover transient 503/500/429 spikes.
     response = None
     last_exc: Exception | None = None
-    for model in ("gemini-3.5-flash", "gemini-3.1-flash-lite"):
-        for attempt in range(3):
-            try:
-                print(f"[judge] {model} attempt {attempt + 1}", flush=True)
-                response = client.models.generate_content(
-                    model=model,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0,  # deterministic grading
-                        response_mime_type="application/json",
-                        response_schema=_Verdict,  # guaranteed schema-valid JSON
-                    ),
-                )
-                break
-            except Exception as exc:  # noqa: BLE001 — retry/fallback judge errors
-                last_exc = exc
-                msg = str(exc)
-                print(f"[judge] {model} failed: {msg[:120]}", flush=True)
-                transient = (
-                    "503" in msg
-                    or "500" in msg
-                    or "UNAVAILABLE" in msg
-                    or ("429" in msg and "PerMinute" in msg)
-                )
-                if transient and attempt < 2:
-                    time.sleep(15 * (attempt + 1))
-                    continue
-                break  # per-day quota / persistent error: try fallback model
-        if response is not None:
+    model = "gemini-3.6-flash"
+    for attempt in range(3):
+        try:
+            print(f"[judge] {model} attempt {attempt + 1}", flush=True)
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0,  # deterministic grading
+                    response_mime_type="application/json",
+                    response_schema=_Verdict,  # guaranteed schema-valid JSON
+                ),
+            )
+            break
+        except Exception as exc:  # noqa: BLE001 — retry judge errors
+            last_exc = exc
+            msg = str(exc)
+            print(f"[judge] {model} failed: {msg[:120]}", flush=True)
+            transient = (
+                "503" in msg
+                or "500" in msg
+                or "UNAVAILABLE" in msg
+                or ("429" in msg and "PerMinute" in msg)
+            )
+            if transient and attempt < 2:
+                time.sleep(15 * (attempt + 1))
+                continue
             break
     if response is None:
         return {"score": 0, "explanation": f"judge unavailable: {last_exc}"}

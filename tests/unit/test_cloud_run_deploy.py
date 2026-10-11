@@ -176,15 +176,17 @@ def test_agent_deploy_uses_secret_manager_not_plaintext_key(monkeypatch) -> None
     assert "--clear-cloudsql-instances" in args
     assert "TEA_ALLOW_EPHEMERAL_SESSIONS=true" in joined
     assert "TEA_AGENT_DEV_UI=false" in env
-    assert "TEA_AGENT_MODEL=gemini-3.1-flash-lite" in joined
+    assert "TEA_AGENT_MODEL=gemini-3.6-flash" in joined
+    assert "TEA_AGENT_MODEL=gemini-3.1-flash-lite" not in joined
     assert "SESSION_DB_PASSWORD" not in joined
 
 
 def test_agent_deploy_honors_tea_agent_model_override(monkeypatch) -> None:
-    monkeypatch.setenv("TEA_AGENT_MODEL", "gemini-3.6-flash")
+    monkeypatch.setenv("TEA_AGENT_MODEL", "override-model")
     args = agent_deploy_args(project="demo-proj")
     env = next(item for item in args if item.startswith("--set-env-vars="))
-    assert "TEA_AGENT_MODEL=gemini-3.6-flash" in env
+    assert "TEA_AGENT_MODEL=override-model" in env
+    assert "TEA_AGENT_MODEL=gemini-3.6-flash" not in env
     assert "TEA_AGENT_MODEL=gemini-3.1-flash-lite" not in env
 
 
