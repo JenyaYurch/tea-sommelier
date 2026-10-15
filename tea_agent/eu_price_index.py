@@ -1,13 +1,15 @@
-"""Saved PL/DE Chinese green prices (TEA-51 part 1).
+"""Saved PL/DE Chinese tea prices (TEA-51 part 1).
 
 The file is ``data/eu_green_price_index.json``, copied into the tea-agent
 image the same way as ``data/teashop_catalog.json``. A later ``find_best_price``
 tool should read this module and must not call shops during a chat.
 
-Offer fields: ``tea_id``, ``title``, ``shop_id``, ``shop``, ``url``, ``price``,
-``currency``, ``pack_size_g``, ``pack_size_unclear``, ``price_per_100g``,
-``in_stock``, ``fetched_at``. Skip rows with ``pack_size_unclear`` or
-``in_stock`` false. ``price_per_100g`` is null when the pack size is unclear.
+Offer fields: ``tea_id``, ``category``, ``title``, ``shop_id``, ``shop``,
+``url``, ``price``, ``currency``, ``pack_size_g``, ``pack_size_unclear``,
+``price_per_100g``, ``in_stock``, ``fetched_at``. ``category`` is green, white,
+yellow, oolong, black, puerh, dark, or scented. Skip rows with
+``pack_size_unclear`` or ``in_stock`` false. ``price_per_100g`` is null when
+the pack size is unclear.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Refresh the PL/DE Chinese green price index from configured shops."""
+"""Refresh the PL/DE Chinese tea price index from configured shops."""
 
 from __future__ import annotations
 
@@ -93,7 +93,7 @@ def build_document(
     )
     day = fetched_at[:10]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "source": "pl-de-open-catalogs",
         "generated_on": day,
         "last_checked": day,
@@ -113,6 +113,14 @@ def write_index(document: dict[str, Any], path: Path) -> None:
     )
 
 
+def _category_counts(offers: list[dict[str, Any]]) -> str:
+    counts = Counter(str(offer.get("category")) for offer in offers if offer.get("category"))
+    if not counts:
+        return ""
+    parts = [f"{name} {counts[name]}" for name in sorted(counts)]
+    return " (" + ", ".join(parts) + ")"
+
+
 def format_summary(results: list[ShopResult]) -> str:
     lines: list[str] = []
     offers = [offer for result in results for offer in result.offers]
@@ -123,13 +131,15 @@ def format_summary(results: list[ShopResult]) -> str:
     for result in results:
         err = f" — {result.error}" if result.error else ""
         warn = f" ({len(result.warnings)} warnings)" if result.warnings else ""
+        stock = sum(1 for offer in result.offers if offer.get("in_stock") is True)
         lines.append(
             f"{result.shop_id:<14} {result.status:<5} {len(result.offers):>4} offers"
-            f"{warn}{err}"
+            f"  {stock:>4} in stock{_category_counts(result.offers)}{warn}{err}"
         )
     lines.append(
         f"shops ok: {ok}/{len(results)}  shops with offers: {shops_with_offers}  "
         f"offers: {len(offers)}  in stock: {in_stock}  unclear pack: {unclear}"
+        f"{_category_counts(offers)}"
     )
     counts = Counter(str(offer.get("tea_id") or "") for offer in offers)
     for tea_id, count in counts.most_common(12):
@@ -142,7 +152,7 @@ def should_write(results: list[ShopResult]) -> str | None:
     if not any(result.status == "ok" for result in results):
         return "no shop could be read; index not written"
     if not any(result.offers for result in results):
-        return "no Chinese green offers; index not written"
+        return "no Chinese tea offers; index not written"
     return None
 
 
@@ -169,6 +179,10 @@ def _refresh_one(
     if shop.platform == "woocommerce":
         kwargs["variation_pause_s"] = variation_pause_s
         return fetch_woocommerce(shop, fetcher, **kwargs)
+    if shop.platform == "html":
+        from tea_agent.eu_shops.html_catalog import fetch_shop as fetch_html
+
+        return fetch_html(shop, fetcher, **kwargs)
     return ShopResult(
         shop_id=shop.id,
         name=shop.name,

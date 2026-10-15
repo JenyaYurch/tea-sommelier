@@ -864,7 +864,7 @@ Facts come from tools, not from the LLM’s memory.
 | --- | --- | --- |
 | tea.support slugs / aliases | `data/tea_slugs.json` | `uv run python scripts/build_tea_slugs.py` |
 | teashop.by SKUs | `data/teashop_catalog.json` | `uv run python scripts/parse_teashop.py` |
-| PL/DE Chinese green prices | `data/eu_green_price_index.json` | `uv run python scripts/refresh_eu_price_index.py` |
+| PL/DE Chinese tea prices | `data/eu_green_price_index.json` | `uv run python scripts/refresh_eu_price_index.py` |
 
 Shop refresh checklist (every 1–2 weeks):
 
@@ -881,9 +881,11 @@ uv run python scripts/parse_teashop.py --max-pages 6 --dry-run
 
 Redeploy after catalog commits if Cloud Run should serve the new JSON (image copies `data/` at build time).
 
-### PL/DE Chinese green price index
+### PL/DE Chinese tea price index
 
-Daily snapshot of Chinese green teas from Polish and German shops with an open catalog (Shopify `/products.json` or the WooCommerce Store API). The list is `data/eu_green_shops.json`. The agent does not call these shops during a chat; a later price tool only reads the file.
+Daily snapshot of Chinese teas from Polish and German shops: green, white, yellow, oolong (including Taiwan), black, pu-erh, and jasmine / osmanthus / ginseng scented teas. Japan, India, Nepal, Ceylon, Kenya, flavoured blends, herbal infusions, teaware, and gift sets stay out. The shop list is `data/eu_green_shops.json`. The index file keeps the name `data/eu_green_price_index.json`. The agent does not call these shops during a chat; a later price tool only reads the file.
+
+Shopify shops use `/products.json`. WooCommerce shops use the Store API. Czajownia, Yoshi En, and Nan Yi Tee are read from category HTML (Czajownia product pages only when the tile has no stock or weight price). eHerbata and Czajnikowy stay in the list; a Cloudflare 403 is recorded and the script does not try to get around it.
 
 ```bash
 uv run python scripts/refresh_eu_price_index.py --status
@@ -891,7 +893,7 @@ uv run python scripts/refresh_eu_price_index.py
 uv run python scripts/refresh_eu_price_index.py --dry-run
 ```
 
-The script pages each shop with a 20s timeout, a short pause between pages, and at most two shops at once. The User-Agent is `TeaBotPriceIndex/1.0`. A 429 is retried after the server's Retry-After (up to 90s). A shop that still fails (HTTP error, Cloudflare block, pagination cap) is named in the JSON and contributes no offers. Each offer stores the tea id, shop title, URL, price, currency, pack grams, price per 100 g, stock, and `fetched_at`. Variants with different weights are separate rows. If the pack size is not one clear weight, `pack_size_unclear` is true and `price_per_100g` is null; those rows stay in the file so they are not shown as a comparable price.
+The script uses a 20s timeout, a short pause between pages, and at most two shops at once. HTML shops wait at least 1.1s, honor Crawl-delay, and skip paths `robots.txt` disallows. The User-Agent is `TeaBotPriceIndex/1.0`. A 429 is retried with backoff; a numeric Retry-After is honored plus 2 seconds, and capped at 90s. A shop that still fails is named in the JSON and contributes no offers. Each offer stores the tea id, `category`, shop title, URL, price, currency, pack grams, price per 100 g, stock, and `fetched_at`. Variants with different weights are separate rows. If the pack size is not one clear weight, `pack_size_unclear` is true and `price_per_100g` is null; those rows stay in the file so they are not shown as a comparable price.
 
 Storage matches the teashop.by catalog: JSON under `data/`, copied into the tea-agent image. There is no Cloud Scheduler and no database. After the file changes, redeploy tea-agent so Cloud Run serves it. `--status` exits 1 when `last_checked` is missing or a day old. Each day: run the script, check the summary, commit `data/eu_green_price_index.json`, redeploy.
 

@@ -1,4 +1,4 @@
-"""Chinese-green title filter. No network."""
+"""Chinese tea title filter. No network."""
 
 from __future__ import annotations
 
@@ -6,8 +6,10 @@ import pytest
 
 from tea_agent.eu_shops.classify import (
     encyclopedia_green_ids,
+    encyclopedia_tea_ids,
     manual_tea_ids,
     match_chinese_green,
+    match_chinese_tea,
 )
 
 
@@ -59,22 +61,34 @@ def test_named_chinese_greens(title: str, tea_id: str) -> None:
         "Formosa Pi Lo Chun",
         "Qi Shan Mao Feng",
         "Huangshan Organic Mao Feng Hong Cha",
-        "Dian Hong Mao Feng",
         "Czerwony Long Jing",
+        "Czarna Long Jing",
         "Jiu Qu Hong Mei (Czerwony Long Jing)",
-        "Qimen Mao Feng",
         "Matcha Ceremonialna",
         "Milk Oolong",
         "Gaiwan Long Jing",
         "Long Jing teapot",
         "Jasmine Green",
+        "Earl Grey",
+        "Sencha Asan",
+        "Rooibos",
+        "Kenya Black Tea",
+        "Kenia",
+        "Darjeeling",
         "Wuyishan Hochland Grüntee",
         "Xiang Shui Bai Cha",
-        "Bai Mu Dan",
         "Green tea",
+        "Oolong",
+        "Pu-erh",
         "China",
         "Yunnan",
+        "Schwarztee",
+        "Weisser Tee",
+        "Gift set Long Jing",
+        "Zestaw herbat Chiny",
         "Long Jing / Bi Luo Chun",
+        "Dragon Pearls",
+        "Gushu Sheng Dragon Pearls 2021",
     ],
 )
 def test_excludes_other_teas_and_teaware(title: str) -> None:
@@ -93,5 +107,45 @@ def test_anji_keeps_a_white_tea_label() -> None:
     assert match_chinese_green("Anji Bai Cha", "white") == "anji-baicha"
 
 
-def test_manual_ids_are_chinese_greens() -> None:
-    assert manual_tea_ids() <= encyclopedia_green_ids()
+@pytest.mark.parametrize(
+    ("title", "context", "tea_id", "category"),
+    [
+        ("Bai Mu Dan", "", "bai-mudan", "white"),
+        ("Silver Needle", "", "baihao-yinzhen", "white"),
+        ("Junshan Yinzhen", "", "junshan-yin-zhen", "yellow"),
+        ("Huo Shan Huang Ya", "", "huoshan-huang-ya", "yellow"),
+        ("Tie Guan Yin", "", "tie-guanyin", "oolong"),
+        ("Muzha Tie Guan Yin", "", "muzha-tieguanyin", "oolong"),
+        ("Ali Shan", "", "alishan-wulong", "oolong"),
+        ("Dong Ding", "", "dong-ding-wulong", "oolong"),
+        ("Jin Xuan", "", "jin-xuan", "oolong"),
+        ("Da Hong Pao", "", "da-hong-pao", "oolong"),
+        ("Jin Jun Mei", "", "jin-jun-mei", "black"),
+        ("Dian Hong Mao Feng", "", "dianhong-gongfu", "black"),
+        ("Qimen Mao Feng", "", "qimen-hongcha", "black"),
+        ("Lao Cha Tou", "", "lao-cha-tou", "puerh"),
+        ("Jasmine Pearls", "", "moli-longzhu", "scented"),
+        ("Jasmin Dragon Pearls", "", "moli-longzhu", "scented"),
+        ("Jasmine Long Jing", "", "xihu-longjing", "scented"),
+        ("Anji Bai Cha", "white", "anji-baicha", "green"),
+        ("Formosa Ali Shan", "", "alishan-wulong", "oolong"),
+    ],
+)
+def test_category_for_each_chinese_kind(title: str, context: str, tea_id: str, category: str) -> None:
+    match = match_chinese_tea(title, context)
+    assert match is not None
+    assert match.tea_id == tea_id
+    assert match.category == category
+
+
+def test_taiwan_subtitle_rejects_a_mainland_green() -> None:
+    assert match_chinese_tea("Bi Luo Chun", "San Xia, Taipei, Taiwan") is None
+
+
+def test_manual_ids_are_in_the_encyclopedia() -> None:
+    teas = encyclopedia_tea_ids()
+    assert manual_tea_ids() <= teas
+    assert "tie-guanyin" in teas
+    assert "alishan-wulong" in teas
+    assert encyclopedia_green_ids() <= teas
+    assert "xihu-longjing" in encyclopedia_green_ids()

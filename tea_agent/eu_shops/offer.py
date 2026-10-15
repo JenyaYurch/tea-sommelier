@@ -11,6 +11,7 @@ from tea_agent.eu_shops.pack import PackParse, money_number, price_per_100g
 def make_offer(
     *,
     tea_id: str,
+    category: str,
     title: str,
     shop_id: str,
     shop: str,
@@ -30,6 +31,7 @@ def make_offer(
         grams = None
     return {
         "tea_id": tea_id,
+        "category": category,
         "title": title,
         "shop_id": shop_id,
         "shop": shop,

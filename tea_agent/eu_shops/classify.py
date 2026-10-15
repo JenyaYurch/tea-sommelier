@@ -1,17 +1,21 @@
-"""Conservative match of a shop title to a Chinese green tea id.
+"""Conservative match of a shop title to one Chinese tea.
 
-Ids are tea.support slugs (``xihu-longjing``, ``biluochun``, …). A title is
-kept only when it names one Chinese green. Teaware, other tea types, and
-non-Chinese origins (Nepal Mao Feng, Formosa Pi Lo Chun, matcha) are dropped.
-Ambiguous leftovers such as ``Qi Shan Mao Feng`` are dropped too.
+Ids are tea.support slugs. A title is kept only when it names one tea from
+China or Taiwan: green, white, yellow, oolong, black (hong cha), pu-erh, or
+a jasmine / osmanthus / ginseng-scented tea. Teaware, herbal infusions,
+flavoured blends, gift sets, and non-Chinese origins (Japan, India, Nepal,
+Ceylon, Kenya, …) are dropped. Ambiguous leftovers such as ``Qi Shan Mao
+Feng`` are dropped too.
 
-``mao feng`` with no other place name maps to Huangshan Mao Feng, the tea
-shops mean by that name. A different place (Yunnan, Emei, Qi Shan, Nepal)
-does not.
+``mao feng`` with no other place name maps to Huangshan Mao Feng. A different
+place (Yunnan, Emei, Qi Shan, Nepal) does not. A type word outside the tea
+name (``Huangshan Mao Feng Hong Cha``, ``Czerwony Long Jing``) drops the row
+instead of filing it under the green tea.
 """
 
 from __future__ import annotations
 
+import itertools
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -82,6 +86,7 @@ _MANUAL: tuple[tuple[str, str, bool], ...] = (
     ("houkui", "taiping-hou-kui", False),
     ("hou kwei", "taiping-hou-kui", False),
     ("anji bai cha", "anji-baicha", False),
+    ("an ji bai cha", "anji-baicha", False),
     ("anji baicha", "anji-baicha", False),
     ("anji white tea", "anji-baicha", False),
     ("anji biala", "anji-baicha", False),
@@ -120,10 +125,68 @@ _MANUAL: tuple[tuple[str, str, bool], ...] = (
     ("enshi yulu", "enshi-yulu", False),
     ("jasmine pearl", "moli-longzhu", False),
     ("jasmine pearls", "moli-longzhu", False),
+    ("jasmin pearl", "moli-longzhu", False),
+    ("jasmin pearls", "moli-longzhu", False),
     ("jasmine dragon pearl", "moli-longzhu", False),
-    ("dragon pearl", "moli-longzhu", False),
+    ("jasmine dragon pearls", "moli-longzhu", False),
+    ("jasmin dragon pearl", "moli-longzhu", False),
+    ("jasmin dragon pearls", "moli-longzhu", False),
     ("mo li long zhu", "moli-longzhu", False),
     ("moli longzhu", "moli-longzhu", False),
+    ("tie guan yin", "tie-guanyin", False),
+    ("tieguanyin", "tie-guanyin", False),
+    ("iron goddess", "tie-guanyin", False),
+    ("da hong pao", "da-hong-pao", False),
+    ("dahongpao", "da-hong-pao", False),
+    ("big red robe", "da-hong-pao", False),
+    ("dong ding", "dong-ding-wulong", False),
+    ("dongding", "dong-ding-wulong", False),
+    ("tung ting", "dong-ding-wulong", False),
+    ("ali shan hong cha", "alishan-hongcha", False),
+    ("alishan hong cha", "alishan-hongcha", False),
+    ("ali shan", "alishan-wulong", False),
+    ("alishan", "alishan-wulong", False),
+    ("dong fang mei ren", "dongfang-meiren", False),
+    ("dongfang meiren", "dongfang-meiren", False),
+    ("oriental beauty", "dongfang-meiren", False),
+    ("jin xuan", "jin-xuan", False),
+    ("jinxuan", "jin-xuan", False),
+    ("nai xiang", "nai-xiang-wulong", False),
+    ("naixiang", "nai-xiang-wulong", False),
+    ("rou gui", "rou-gui", False),
+    ("rougui", "rou-gui", False),
+    ("shui xian", "shui-xian", False),
+    ("shuixian", "shui-xian", False),
+    ("bao zhong", "wenshan-baozhong-cha", False),
+    ("baozhong", "wenshan-baozhong-cha", False),
+    ("pouchong", "wenshan-baozhong-cha", False),
+    ("bai mu dan", "bai-mudan", False),
+    ("baimudan", "bai-mudan", False),
+    ("pai mu tan", "bai-mudan", False),
+    ("white peony", "bai-mudan", False),
+    ("bai hao yin zhen", "baihao-yinzhen", False),
+    ("silver needle", "baihao-yinzhen", False),
+    ("srebrne szpilki", "baihao-yinzhen", False),
+    ("shou mei", "shou-mei", False),
+    ("shoumei", "shou-mei", False),
+    ("jin jun mei", "jin-jun-mei", False),
+    ("jinjunmei", "jin-jun-mei", False),
+    ("dian hong", "dianhong-gongfu", False),
+    ("dianhong", "dianhong-gongfu", False),
+    ("keemun", "qimen-hongcha", False),
+    ("qimen", "qimen-hongcha", False),
+    ("qi hong", "qimen-hongcha", False),
+    ("qi men", "qimen-hongcha", False),
+    ("zheng shan xiao zhong", "tongmu-yesheng-zheng-shan-xiao-zhong", False),
+    ("lapsang souchong", "tongmu-yesheng-zheng-shan-xiao-zhong", False),
+    ("lapsang", "tongmu-yesheng-zheng-shan-xiao-zhong", False),
+    ("jun shan yin zhen", "junshan-yin-zhen", False),
+    ("junshan yinzhen", "junshan-yin-zhen", False),
+    ("huo shan huang ya", "huoshan-huang-ya", False),
+    ("huoshan huang ya", "huoshan-huang-ya", False),
+    ("meng ding huang ya", "mengding-huang-ya", False),
+    ("lao cha tou", "lao-cha-tou", False),
+    ("gong ting", "gongting-pu-er", False),
 )
 
 _MANUAL_CJK: tuple[tuple[str, str], ...] = (
@@ -141,6 +204,16 @@ _MANUAL_CJK: tuple[tuple[str, str], ...] = (
     ("蒙顶甘露", "mengding-gan-lu"),
     ("信阳毛尖", "xinyang-mao-jian"),
     ("云南毛峰", "yun-nan-mao-feng"),
+    ("铁观音", "tie-guanyin"),
+    ("大红袍", "da-hong-pao"),
+    ("白牡丹", "bai-mudan"),
+    ("白毫银针", "baihao-yinzhen"),
+    ("金骏眉", "jin-jun-mei"),
+    ("寿眉", "shou-mei"),
+    ("东方美人", "dongfang-meiren"),
+    ("冻顶", "dong-ding-wulong"),
+    ("茉莉龙珠", "moli-longzhu"),
+    ("君山银针", "junshan-yin-zhen"),
 )
 
 # When a general tea matched, a place token in the title picks the narrower id.
@@ -163,6 +236,9 @@ _REFINEMENTS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("huangshan-mao-feng", ("meng", "ding"), "mengding-mao-feng"),
     ("huangshan-mao-feng", ("yandang",), "yandang-mao-feng"),
     ("huangshan-mao-feng", ("yan", "dang"), "yandang-mao-feng"),
+    ("tie-guanyin", ("muzha",), "muzha-tieguanyin"),
+    ("baihao-yinzhen", ("junshan",), "junshan-yin-zhen"),
+    ("baihao-yinzhen", ("jun", "shan"), "junshan-yin-zhen"),
 )
 
 _FILLERS = frozenset(
@@ -280,72 +356,180 @@ _ORIGIN_PHRASES: tuple[tuple[str, ...], ...] = (
     ("wietnam",),
     ("wietnamska",),
     ("wietnamski",),
-    ("taiwan",),
-    ("tajwan",),
-    ("formosa",),
-    ("taiwanese",),
     ("georgia",),
     ("gruzja",),
     ("gruzinski",),
     ("kenya",),
+    ("kenia",),
+    ("sikkim",),
+    ("turkei",),
+    ("tuerkei",),
+    ("sudkorea",),
     ("matcha",),
     ("sencha",),
     ("gyokuro",),
     ("hojicha",),
+    ("houjicha",),
     ("genmaicha",),
     ("bancha",),
     ("kukicha",),
+    ("kabusecha",),
+    ("wakocha",),
+    ("wakoucha",),
+    ("tencha",),
+    ("kamairicha",),
 )
 
-_TYPE_PHRASES: tuple[tuple[str, ...], ...] = (
-    ("oolong",),
-    ("wulong",),
-    ("ulun",),
-    ("puer",),
-    ("puerh",),
-    ("pu", "erh"),
-    ("pu", "er"),
-    ("hong", "cha"),
-    ("hongcha",),
-    ("hong", "mei"),
-    ("red", "tea"),
-    ("black", "tea"),
-    ("schwarzer", "tee"),
-    ("schwarztee",),
-    ("roter", "tee"),
-    ("czerwona", "herbata"),
-    ("czerwony",),
-    ("czerwona",),
-    ("czerwonej",),
-    ("yellow", "tea"),
-    ("gelber", "tee"),
-    ("zolta", "herbata"),
-    ("huang", "ya"),
-    ("dian", "hong"),
-    ("dianhong",),
-    ("jin", "jun", "mei"),
-    ("keemun",),
-    ("qimen",),
-    ("lapsang",),
-    ("souchong",),
-    ("dancong",),
-    ("dan", "cong"),
-    ("yan", "cha"),
-    ("yancha",),
-    ("tie", "guan", "yin"),
-    ("da", "hong", "pao"),
-    ("gaba",),
-    ("bai", "mu", "dan"),
-    ("baimudan",),
-    ("silver", "needle"),
-    ("baihao", "yinzhen"),
-    ("white", "tea"),
-    ("weisser", "tee"),
-    ("weisse", "tee"),
-    ("biala", "herbata"),
+# A type word that sits outside the matched name. ``Hong Cha`` after Mao Feng
+# means the row is not the green tea.
+_CATEGORY_SIGNALS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("green", ("green", "tea")),
+    ("green", ("gruner", "tee")),
+    ("green", ("gruener", "tee")),
+    ("green", ("zielona", "herbata")),
+    ("green", ("herbata", "zielona")),
+    ("green", ("lu", "cha")),
+    ("white", ("white", "tea")),
+    ("white", ("weisser", "tee")),
+    ("white", ("weisse", "tee")),
+    ("white", ("biala", "herbata")),
+    ("white", ("herbata", "biala")),
+    ("white", ("white",)),
+    ("white", ("weiss",)),
+    ("white", ("biala",)),
+    ("white", ("bialy",)),
+    ("yellow", ("yellow", "tea")),
+    ("yellow", ("gelber", "tee")),
+    ("yellow", ("zolta", "herbata")),
+    ("yellow", ("huang", "cha")),
+    ("oolong", ("oolong",)),
+    ("oolong", ("wulong",)),
+    ("oolong", ("ulun",)),
+    ("black", ("hong", "cha")),
+    ("black", ("hongcha",)),
+    ("black", ("hong", "mei")),
+    ("black", ("red", "tea")),
+    ("black", ("black", "tea")),
+    ("black", ("schwarzer", "tee")),
+    ("black", ("schwarztee",)),
+    ("black", ("roter", "tee")),
+    ("black", ("czerwona", "herbata")),
+    ("black", ("czerwony",)),
+    ("black", ("czerwona",)),
+    ("black", ("czerwonej",)),
+    ("black", ("czarna",)),
+    ("black", ("czarny",)),
+    ("black", ("czarne",)),
+    ("black", ("czarnej",)),
+    ("black", ("schwarz",)),
+    ("black", ("schwarzer",)),
+    ("yellow", ("zolta",)),
+    ("yellow", ("zolty",)),
+    ("yellow", ("zolte",)),
+    ("yellow", ("zoltej",)),
+    ("puerh", ("puer",)),
+    ("puerh", ("puerh",)),
+    ("puerh", ("pu", "erh")),
+    ("puerh", ("pu", "er")),
+    ("dark", ("hei", "cha")),
+    ("dark", ("heicha",)),
+    ("dark", ("dark", "tea")),
 )
 
-_WHITE_TOKENS = frozenset({"white", "weiss", "weisser", "weisse", "biala", "bialy"})
+_FLAVOUR_PHRASES: tuple[tuple[str, ...], ...] = (
+    ("earl", "grey"),
+    ("english", "breakfast"),
+    ("aromatyzowana",),
+    ("aromatyzowany",),
+    ("aromatyzowane",),
+    ("aromatisiert",),
+    ("aromatisierte",),
+    ("aromatisierter",),
+    ("flavoured",),
+    ("flavored",),
+    ("flavour",),
+    ("flavor",),
+    ("erdbeer",),
+    ("erdbeere",),
+    ("strawberry",),
+    ("truskawka",),
+    ("truskawkowa",),
+    ("mango",),
+    ("pfirsich",),
+    ("peach",),
+    ("brzoskwinia",),
+    ("vanille",),
+    ("vanilla",),
+    ("wanilia",),
+    ("waniliowa",),
+    ("bergamot",),
+    ("bergamotte",),
+    ("bergamotka",),
+    ("zitrone",),
+    ("lemon",),
+    ("cytryna",),
+    ("cytrynowa",),
+    ("minze",),
+    ("mint",),
+    ("mieta",),
+    ("himbeer",),
+    ("raspberry",),
+    ("malina",),
+    ("kirsche",),
+    ("cherry",),
+    ("kokos",),
+    ("coconut",),
+    ("karamell",),
+    ("caramel",),
+    ("schoko",),
+    ("chocolate",),
+    ("czekolada",),
+)
+
+_HERBAL_PHRASES: tuple[tuple[str, ...], ...] = (
+    ("rooibos",),
+    ("yerba",),
+    ("mate",),
+    ("chamomile",),
+    ("rumianek",),
+    ("kamille",),
+    ("krautertee",),
+    ("herbal",),
+    ("tisane",),
+    ("hibiskus",),
+    ("hibiscus",),
+    ("melisa",),
+    ("ziolowa",),
+    ("ziolowy",),
+    ("ziolowe",),
+)
+
+_GIFT_PHRASES: tuple[tuple[str, ...], ...] = (
+    ("gift", "set"),
+    ("tee", "set"),
+    ("tea", "set"),
+    ("teeset",),
+    ("tastingset",),
+    ("tasting", "set"),
+    ("geschenkset",),
+    ("probierset",),
+    ("probierpaket",),
+    ("vorteilsset",),
+    ("degustationsset",),
+    ("zestaw",),
+    ("sampler",),
+    ("set",),
+    ("sets",),
+    ("adventskalender",),
+)
+
+_EVENT_PHRASES: tuple[tuple[str, ...], ...] = (
+    ("warsztaty",),
+    ("warsztat",),
+    ("workshop",),
+    ("seminar",),
+    ("seminarium",),
+)
 
 _WARE_PHRASES: tuple[tuple[str, ...], ...] = (
     ("gaiwan",),
@@ -426,12 +610,91 @@ _TRAD_TO_SIMP = str.maketrans(
         "陳": "陈",
         "嶺": "岭",
         "峯": "峰",
+        "鐵": "铁",
+        "觀": "观",
+        "凍": "冻",
+        "頂": "顶",
+        "壽": "寿",
     }
 )
 
 _YEAR = re.compile(r"^(?:19|20)\d{2}$")
 _GENERIC_AUTO_TOKENS = frozenset(
-    {"green", "tea", "teas", "tee", "china", "chinese", "lu", "cha", "lv"}
+    {
+        "green",
+        "tea",
+        "teas",
+        "tee",
+        "china",
+        "chinese",
+        "lu",
+        "cha",
+        "lv",
+        "oolong",
+        "wulong",
+        "puer",
+        "puerh",
+        "hong",
+        "red",
+        "black",
+        "white",
+        "yellow",
+        "bai",
+        "hei",
+    }
+)
+
+_IN_SCOPE_TYPES = frozenset({"green", "white", "yellow", "oolong", "red", "puer"})
+_TYPE_CATEGORY = {
+    "green": "green",
+    "white": "white",
+    "yellow": "yellow",
+    "oolong": "oolong",
+    "red": "black",
+    "puer": "puerh",
+}
+_TAIWAN_MARKERS = frozenset(
+    {"taiwan", "tajwan", "formosa", "taiwanese", "taipei", "tajpej"}
+)
+_TAIWAN_SLUG_MARKERS = (
+    "taiwan",
+    "formosa",
+    "alishan",
+    "dong-ding",
+    "da-yu-ling",
+    "li-shan",
+    "muzha",
+    "dongfang-meiren",
+    "shan-lin",
+    "shanlinxi",
+    "taicha",
+    "wenshan-baozhong",
+    "jin-xuan",
+    "nai-xiang",
+    "cuiyu",
+    "guifei",
+    "he-huan",
+    "hongshui",
+    "qi-lai",
+    "riyuetan",
+    "sijichun",
+)
+_DARK_SLUG_MARKERS = ("liu-bao", "liubao", "fu-zhuan", "fuzhuan", "tian-jian", "hei-cha", "heicha", "qianliang")
+_SCENT_SLUG_MARKERS = ("moli", "jasmine", "jasmin", "guihua", "osmanthus", "renshen")
+_SCENT_TOKENS = frozenset(
+    {
+        "moli",
+        "jasmine",
+        "jasmin",
+        "jasminowa",
+        "jasminowy",
+        "jasminowe",
+        "osmanthus",
+        "guihua",
+        "ginseng",
+        "renshen",
+        "zenszen",
+    }
 )
 _MAX_FILLER_GAP = 3
 
@@ -469,31 +732,58 @@ def cjk_norm(value: str) -> str:
     return value.translate(_TRAD_TO_SIMP)
 
 
-def match_chinese_green(title: str, context: str = "") -> str | None:
-    """Return a Chinese green slug, or None when the title is not one tea."""
+@dataclass(frozen=True)
+class TeaMatch:
+    """One canonical tea and the shelf category a later price tool should use."""
+
+    tea_id: str
+    category: str
+
+
+def match_chinese_tea(title: str, context: str = "") -> TeaMatch | None:
+    """Return a Chinese tea, or None when the title is not one of them."""
     if not title or not str(title).strip():
         return None
     tokens = fold_latin(title).split()
-    ctx_tokens = fold_latin(f"{title} {context}").split()
-    if _contains_any(ctx_tokens, _ORIGIN_PHRASES):
+    context_tokens = fold_latin(context).split()
+    combined = tokens + context_tokens
+    if _contains_any(combined, _ORIGIN_PHRASES):
         return None
-    if _contains_any(ctx_tokens, _WARE_PHRASES):
+    if _contains_any(combined, _WARE_PHRASES):
         return None
-    if _contains_any(ctx_tokens, _TYPE_PHRASES):
+    if _contains_any(combined, _FLAVOUR_PHRASES):
         return None
-    white = bool(set(ctx_tokens) & _WHITE_TOKENS) or _contains_any(
-        ctx_tokens, (("white", "tea"), ("biala", "herbata"), ("weisser", "tee"))
-    )
-    latin, cjk = _indexes()
+    if _contains_any(combined, _HERBAL_PHRASES):
+        return None
+    if _contains_any(combined, _GIFT_PHRASES):
+        return None
+    if _contains_any(combined, _EVENT_PHRASES):
+        return None
+    latin, cjk, catalog = _indexes()
     latin_hit = _best_latin(tokens, latin)
     cjk_hit = _best_cjk(cjk_norm(title), cjk)
     chosen = _choose(latin_hit, cjk_hit)
     if chosen is None:
         return None
-    tea_id = _refine(chosen, tokens)
-    if white and tea_id != "anji-baicha":
+    tea_id = _refine(chosen.tea_id, tokens)
+    info = catalog.get(tea_id)
+    if info is None:
         return None
-    return tea_id
+    if _has_taiwan_marker(combined) and not info.taiwan:
+        return None
+    category = _category(info, tea_id, tokens)
+    span = chosen.span
+    if not _category_allowed(category, tea_id, tokens, span, context_tokens):
+        return None
+    return TeaMatch(tea_id, category)
+
+
+def match_chinese_green(title: str, context: str = "") -> str | None:
+    """Tea id for any kept Chinese tea. The name is historical."""
+    match = match_chinese_tea(title, context)
+    if match is None:
+        return None
+    return match.tea_id
 
 
 def manual_tea_ids() -> set[str]:
@@ -504,17 +794,15 @@ def manual_tea_ids() -> set[str]:
     return ids
 
 
+def encyclopedia_tea_ids() -> set[str]:
+    """Chinese and Taiwanese tea slugs from the local tea.support list."""
+    return set(_indexes()[2])
+
+
 def encyclopedia_green_ids() -> set[str]:
-    """Chinese green slugs from the local tea.support list. Taiwanese greens are out."""
-    ids: set[str] = set()
-    for tea in load_teas():
-        slug = str(tea.get("slug") or "")
-        if tea.get("tea_type") != "green" or tea.get("origin_country") != "CN":
-            continue
-        if slug.startswith("taiwan") or "taiwan" in slug:
-            continue
-        ids.add(slug)
-    return ids
+    """Chinese green slugs, including Taiwanese greens."""
+    catalog = _indexes()[2]
+    return {slug for slug, info in catalog.items() if info.tea_type == "green"}
 
 
 def _refine(tea_id: str, tokens: list[str]) -> str:
@@ -525,18 +813,16 @@ def _refine(tea_id: str, tokens: list[str]) -> str:
     return tea_id
 
 
-def _choose(latin: _Hit | None, cjk: _Hit | None) -> str | None:
-    if latin is None and cjk is None:
-        return None
+def _choose(latin: _Hit | None, cjk: _Hit | None) -> _Hit | None:
     if latin is None:
-        return cjk.tea_id if cjk else None
+        return cjk
     if cjk is None:
-        return latin.tea_id
+        return latin
     if latin.tea_id == cjk.tea_id:
-        return latin.tea_id
+        return latin
     if latin.score[0] == cjk.score[0]:
         return None
-    return latin.tea_id if latin.score > cjk.score else cjk.tea_id
+    return latin if latin.score > cjk.score else cjk
 
 
 def _best_latin(tokens: list[str], aliases: tuple[_Alias, ...]) -> _Hit | None:
@@ -651,13 +937,109 @@ def _usable_auto(phrase: str) -> bool:
     return len(tokens) == 1 and len(phrase) >= 8
 
 
+@dataclass(frozen=True)
+class _TeaInfo:
+    tea_type: str
+    taiwan: bool
+    dark: bool
+
+
+def _has_taiwan_marker(tokens: list[str]) -> bool:
+    return any(token in _TAIWAN_MARKERS for token in tokens)
+
+
+def _has_scent(tea_id: str, tokens: list[str]) -> bool:
+    if any(marker in tea_id for marker in _SCENT_SLUG_MARKERS):
+        return True
+    if any(token in _SCENT_TOKENS for token in tokens):
+        return True
+    pairs = itertools.pairwise(tokens)
+    return any(left == "gui" and right == "hua" for left, right in pairs)
+
+
+def _category(info: _TeaInfo, tea_id: str, tokens: list[str]) -> str:
+    if _has_scent(tea_id, tokens):
+        return "scented"
+    if info.dark:
+        return "dark"
+    return _TYPE_CATEGORY[info.tea_type]
+
+
+def _signal_set(tokens: list[str]) -> set[str]:
+    found: set[str] = set()
+    if not tokens:
+        return found
+    token_set = set(tokens)
+    for category, phrase in _CATEGORY_SIGNALS:
+        if len(phrase) == 1:
+            if phrase[0] in token_set:
+                found.add(category)
+            continue
+        width = len(phrase)
+        for index in range(len(tokens) - width + 1):
+            if tuple(tokens[index : index + width]) == phrase:
+                found.add(category)
+                break
+    return found
+
+
+def _signals_outside(tokens: list[str], span: tuple[int, int] | None) -> set[str]:
+    if span is None:
+        return _signal_set(tokens)
+    start, end = span
+    outside = [token for index, token in enumerate(tokens) if index < start or index >= end]
+    return _signal_set(outside)
+
+
+def _category_allowed(
+    category: str,
+    tea_id: str,
+    tokens: list[str],
+    span: tuple[int, int] | None,
+    context_tokens: list[str],
+) -> bool:
+    """Drop a row when a type word outside the tea name disagrees with it."""
+    signals = _signals_outside(tokens, span)
+    context_signals = _signal_set(context_tokens)
+    if len(context_signals) == 1:
+        signals |= context_signals
+    if not signals or category in signals or category == "scented":
+        return True
+    if tea_id == "anji-baicha" and signals <= {"green", "white"}:
+        return True
+    return category == "dark" and "puerh" in signals
+
+
+def _is_taiwan_tea(slug: str, name_en: str) -> bool:
+    if any(marker in slug for marker in _TAIWAN_SLUG_MARKERS):
+        return True
+    # "Taiwanese" in an English name is not enough: 武夷烏龍 is labeled that way.
+    name_tokens = set(fold_latin(name_en).split())
+    return bool(name_tokens & {"taiwan", "formosa", "tajwan", "taipei"})
+
+
+def _is_dark_tea(slug: str) -> bool:
+    return any(marker in slug for marker in _DARK_SLUG_MARKERS)
+
+
 @lru_cache(maxsize=1)
-def _indexes() -> tuple[tuple[_Alias, ...], tuple[tuple[str, str, int], ...]]:
-    green_ids = encyclopedia_green_ids()
-    missing = manual_tea_ids() - green_ids
+def _indexes() -> tuple[tuple[_Alias, ...], tuple[tuple[str, str, int], ...], dict[str, _TeaInfo]]:
+    catalog: dict[str, _TeaInfo] = {}
+    for tea in load_teas():
+        slug = str(tea.get("slug") or "")
+        if tea.get("origin_country") != "CN":
+            continue
+        if tea.get("tea_type") not in _IN_SCOPE_TYPES:
+            continue
+        catalog[slug] = _TeaInfo(
+            tea_type=str(tea.get("tea_type") or ""),
+            taiwan=_is_taiwan_tea(slug, str(tea.get("name_en") or "")),
+            dark=_is_dark_tea(slug),
+        )
+    missing = manual_tea_ids() - set(catalog)
     if missing:
         joined = ", ".join(sorted(missing))
-        raise RuntimeError(f"manual tea ids are not Chinese greens: {joined}")
+        raise RuntimeError(f"manual tea ids are not Chinese teas: {joined}")
 
     latin: dict[tuple[str, ...], _Alias] = {}
     for phrase, tea_id, generic in _MANUAL:
@@ -670,7 +1052,7 @@ def _indexes() -> tuple[tuple[_Alias, ...], tuple[tuple[str, str, int], ...]]:
     cjk_bucket: dict[str, set[str]] = {}
     for tea in load_teas():
         slug = str(tea.get("slug") or "")
-        if slug not in green_ids:
+        if slug not in catalog:
             continue
         for key in ("name_en", "pinyin"):
             phrase = fold_latin(str(tea.get(key) or ""))
@@ -692,9 +1074,7 @@ def _indexes() -> tuple[tuple[_Alias, ...], tuple[tuple[str, str, int], ...]]:
 
     cjk: dict[str, str] = {}
     for text, tea_id in _MANUAL_CJK:
-        normalized = "".join(
-            ch for ch in cjk_norm(text) if "\u4e00" <= ch <= "\u9fff"
-        )
+        normalized = "".join(ch for ch in cjk_norm(text) if "\u4e00" <= ch <= "\u9fff")
         if len(normalized) >= 2:
             cjk[normalized] = tea_id
     for text, slugs in cjk_bucket.items():
@@ -706,4 +1086,4 @@ def _indexes() -> tuple[tuple[_Alias, ...], tuple[tuple[str, str, int], ...]]:
         (tea_id, text, len(text))
         for text, tea_id in sorted(cjk.items(), key=lambda item: len(item[0]), reverse=True)
     )
-    return tuple(latin.values()), cjk_rows
+    return tuple(latin.values()), cjk_rows, catalog

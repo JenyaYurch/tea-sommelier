@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -26,6 +27,8 @@ class Shop:
     base_url: str
     country: str
     currency: str | None = None
+    parser: str | None = None
+    listing_urls: tuple[str, ...] = ()
 
 
 @dataclass
@@ -44,6 +47,11 @@ class ShopResult:
     def report(self) -> dict[str, Any]:
         in_stock = sum(1 for offer in self.offers if offer.get("in_stock") is True)
         unclear = sum(1 for offer in self.offers if offer.get("pack_size_unclear") is True)
+        by_category = Counter(
+            str(offer.get("category"))
+            for offer in self.offers
+            if offer.get("category")
+        )
         return {
             "id": self.shop_id,
             "name": self.name,
@@ -52,6 +60,7 @@ class ShopResult:
             "offers": len(self.offers),
             "in_stock": in_stock,
             "unclear_pack": unclear,
+            "by_category": dict(sorted(by_category.items())),
             "pages": self.pages,
             "error": self.error,
             "warnings": list(self.warnings),
