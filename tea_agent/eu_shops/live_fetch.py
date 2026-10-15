@@ -14,17 +14,19 @@ from tea_agent.eu_shops.models import FetchResponse
 
 USER_AGENT = (
     "TeaBotPriceIndex/1.0 "
-    "(+https://github.com/JenyaYurch/tea-sommelier; daily Chinese green tea price index)"
+    "(+https://github.com/JenyaYurch/tea-sommelier; daily Chinese tea price index)"
 )
 _HEADERS = {
     "User-Agent": USER_AGENT,
-    "Accept": "application/json",
+    "Accept": "application/json, text/html;q=0.9, text/plain;q=0.8",
     "Accept-Language": "en,de;q=0.8,pl;q=0.7",
 }
 _RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
 _MAX_BACKOFF_S = 20.0
 # Shopify answers 429 with Retry-After: 60. Honor that, and still bound a huge hint.
 _MAX_RETRY_AFTER_S = 90.0
+# Waiting exactly Retry-After retriggers the same window. Add a short cushion.
+_RETRY_AFTER_CUSHION_S = 2.0
 
 
 class RequestsFetcher:
@@ -78,16 +80,21 @@ def _from_response(response: requests.Response) -> FetchResponse:
             data=None,
             error=_http_error(response.status_code, headers),
         )
-    try:
-        data = response.json()
-    except ValueError:
-        return FetchResponse(
-            status=response.status_code,
-            headers=headers,
-            data=None,
-            error="response was not JSON",
-        )
-    return FetchResponse(status=response.status_code, headers=headers, data=data, error=None)
+    text = response.text or ""
+    content_type = headers.get("content-type", "").lower()
+    looks_json = "json" in content_type or text.lstrip()[:1] in "{["
+    if looks_json:
+        try:
+            data = response.json()
+        except ValueError:
+            return FetchResponse(
+                status=response.status_code,
+                headers=headers,
+                data=None,
+                error="response was not JSON",
+            )
+        return FetchResponse(status=response.status_code, headers=headers, data=data, error=None)
+    return FetchResponse(status=response.status_code, headers=headers, data=text, error=None)
 
 
 def _retry_delay(response: requests.Response, attempt: int) -> float:
@@ -97,10 +104,10 @@ def _retry_delay(response: requests.Response, attempt: int) -> float:
     if not raw:
         return backoff
     try:
-        hinted = min(_MAX_RETRY_AFTER_S, max(1.0, float(raw)))
+        hinted = max(1.0, float(raw)) + _RETRY_AFTER_CUSHION_S
     except ValueError:
         return backoff
-    return max(backoff, hinted)
+    return max(backoff, min(_MAX_RETRY_AFTER_S, hinted))
 
 
 def _http_error(status: int, headers: dict[str, str]) -> str:

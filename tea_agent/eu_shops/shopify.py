@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from tea_agent.eu_shops.classify import match_chinese_green
+from tea_agent.eu_shops.classify import match_chinese_tea
 from tea_agent.eu_shops.models import FetchResponse, Shop, ShopResult
 from tea_agent.eu_shops.offer import make_offer
 from tea_agent.eu_shops.pack import parse_major_price, resolve_pack
@@ -102,8 +102,8 @@ def offers_from_product(
     title = " ".join(str(product.get("title") or "").split())
     if not title:
         return []
-    tea_id = match_chinese_green(title, _context(product))
-    if not tea_id:
+    match = match_chinese_tea(title, _context(product))
+    if match is None:
         return []
     handle = str(product.get("handle") or "").strip()
     if not handle:
@@ -125,7 +125,8 @@ def offers_from_product(
         pack = resolve_pack(label, title)
         offers.append(
             make_offer(
-                tea_id=tea_id,
+                tea_id=match.tea_id,
+                category=match.category,
                 title=title,
                 shop_id=shop.id,
                 shop=shop.name,
