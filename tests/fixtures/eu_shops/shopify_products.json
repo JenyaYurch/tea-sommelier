@@ -1,0 +1,148 @@
+{
+  "products": [
+    {
+      "id": 1001,
+      "title": "Long Jing",
+      "handle": "long-jing",
+      "product_type": "Green Tea",
+      "tags": ["China", "2026"],
+      "variants": [
+        {
+          "id": 501,
+          "title": "50g",
+          "option1": "50g",
+          "price": "25.00",
+          "grams": 80,
+          "available": true
+        },
+        {
+          "id": 502,
+          "title": "100g",
+          "option1": "100g",
+          "price": "40.00",
+          "grams": 130,
+          "available": false
+        }
+      ]
+    },
+    {
+      "id": 1002,
+      "title": "Nepal Mao Feng",
+      "handle": "nepal-mao-feng",
+      "product_type": "Green Tea",
+      "tags": ["Nepal"],
+      "variants": [
+        {
+          "id": 511,
+          "title": "50g",
+          "option1": "50g",
+          "price": "10.00",
+          "grams": 50,
+          "available": true
+        }
+      ]
+    },
+    {
+      "id": 1003,
+      "title": "Bi Luo Chun",
+      "handle": "bi-luo-chun",
+      "product_type": "Green Tea",
+      "tags": [],
+      "variants": [
+        {
+          "id": 521,
+          "title": "Default Title",
+          "option1": "Default Title",
+          "price": "12.00",
+          "grams": 80,
+          "available": true
+        }
+      ]
+    },
+    {
+      "id": 1004,
+      "title": "Tai Ping Hou Kui",
+      "handle": "tai-ping-hou-kui",
+      "product_type": "Green Tea",
+      "tags": [],
+      "variants": [
+        {
+          "id": 531,
+          "title": "20g",
+          "option1": "20g",
+          "price": "18.00",
+          "grams": 35,
+          "available": true
+        }
+      ]
+    },
+    {
+      "id": 1005,
+      "title": "Long Jing Teapot",
+      "handle": "long-jing-teapot",
+      "product_type": "Teaware",
+      "tags": [],
+      "variants": [
+        {
+          "id": 541,
+          "title": "Default Title",
+          "option1": "Default Title",
+          "price": "70.00",
+          "grams": 400,
+          "available": true
+        }
+      ]
+    },
+    {
+      "id": 1006,
+      "title": "Milk Oolong",
+      "handle": "milk-oolong",
+      "product_type": "Oolong",
+      "tags": ["Oolong"],
+      "variants": [
+        {
+          "id": 551,
+          "title": "50g",
+          "option1": "50g",
+          "price": "15.00",
+          "grams": 50,
+          "available": true
+        }
+      ]
+    },
+    {
+      "id": 1007,
+      "title": "Huangshan Mao Feng Hong Cha",
+      "handle": "huangshan-mao-feng-hong-cha",
+      "product_type": "Black Tea",
+      "tags": [],
+      "variants": [
+        {
+          "id": 561,
+          "title": "50g",
+          "option1": "50g",
+          "price": "16.00",
+          "grams": 50,
+          "available": true
+        }
+      ]
+    },
+    {
+      "id": 1008,
+      "title": "Anji Bai Cha",
+      "handle": "anji-bai-cha",
+      "product_type": "white",
+      "tags": ["China"],
+      "variants": [
+        {
+          "id": 571,
+          "title": "25 g",
+          "option1": "25 g",
+          "price": "14.00",
+          "grams": 40,
+          "available": true
+        }
+      ]
+    }
+  ]
+}

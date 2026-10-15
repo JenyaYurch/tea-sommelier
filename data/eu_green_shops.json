@@ -1,0 +1,84 @@
+{
+  "shops": [
+    {
+      "id": "thetea",
+      "name": "TheTea",
+      "platform": "woocommerce",
+      "base_url": "https://thetea.pl",
+      "country": "PL",
+      "currency": "PLN"
+    },
+    {
+      "id": "teaeye",
+      "name": "TEA EYE",
+      "platform": "woocommerce",
+      "base_url": "https://teaeye.pl",
+      "country": "PL",
+      "currency": "PLN"
+    },
+    {
+      "id": "czajnikowy",
+      "name": "Czajnikowy",
+      "platform": "woocommerce",
+      "base_url": "https://www.czajnikowy.com.pl",
+      "country": "PL",
+      "currency": "PLN"
+    },
+    {
+      "id": "tea-mail",
+      "name": "Tea Mail",
+      "platform": "shopify",
+      "base_url": "https://tea-mail.pl",
+      "country": "PL",
+      "currency": "PLN"
+    },
+    {
+      "id": "teasome",
+      "name": "Teasome",
+      "platform": "woocommerce",
+      "base_url": "https://teasome.pl",
+      "country": "PL",
+      "currency": "PLN"
+    },
+    {
+      "id": "teewald",
+      "name": "Teewald",
+      "platform": "shopify",
+      "base_url": "https://teewald.de",
+      "country": "DE",
+      "currency": "EUR"
+    },
+    {
+      "id": "tezen",
+      "name": "TEZEN",
+      "platform": "woocommerce",
+      "base_url": "https://www.tezen.eu",
+      "country": "DE",
+      "currency": "EUR"
+    },
+    {
+      "id": "nannuoshan",
+      "name": "Nannuoshan",
+      "platform": "shopify",
+      "base_url": "https://www.nannuoshan.org",
+      "country": "DE",
+      "currency": "EUR"
+    },
+    {
+      "id": "laifufu",
+      "name": "Laifufu",
+      "platform": "shopify",
+      "base_url": "https://laifufu.de",
+      "country": "DE",
+      "currency": "EUR"
+    },
+    {
+      "id": "tushita",
+      "name": "Tushita",
+      "platform": "shopify",
+      "base_url": "https://tushita.eu",
+      "country": "DE",
+      "currency": "EUR"
+    }
+  ]
+}

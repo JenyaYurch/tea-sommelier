@@ -1,0 +1,36 @@
+{
+  "20998": {
+    "id": 20998,
+    "type": "variation",
+    "permalink": "https://teaeye.pl/product/long-jing-ming-qian/?attribute_pa_waga=10g",
+    "variation": "Waga: 10 g",
+    "is_in_stock": true,
+    "stock_availability": {"text": "73 w magazynie", "class": "in-stock"},
+    "prices": {"price": "1000", "currency_code": "PLN", "currency_minor_unit": 2}
+  },
+  "20999": {
+    "id": 20999,
+    "type": "variation",
+    "permalink": "https://teaeye.pl/product/long-jing-ming-qian/?attribute_pa_waga=50g",
+    "variation": "Waga: 50 g",
+    "is_in_stock": false,
+    "stock_availability": {"text": "Brak w magazynie", "class": "out-of-stock"},
+    "prices": {"price": "4500", "currency_code": "PLN", "currency_minor_unit": 2}
+  },
+  "2474": {
+    "id": 2474,
+    "type": "variation",
+    "permalink": "https://www.tezen.eu/produkt/bi-luo-chun/?attribute_pa_gewicht=20-g-washipapier-aromaschutztuete",
+    "variation": "Gewicht: 20 g Washipapier Aromaschutztüte",
+    "is_in_stock": true,
+    "prices": {"price": "1899", "currency_code": "EUR", "currency_minor_unit": 2}
+  },
+  "2951": {
+    "id": 2951,
+    "type": "variation",
+    "permalink": "https://www.tezen.eu/produkt/bi-luo-chun/?attribute_pa_gewicht=80-g-geschenkdose-mit-holzdeckel",
+    "variation": "Gewicht: 80 g Geschenkdose mit Holzdeckel",
+    "is_in_stock": true,
+    "prices": {"price": "3999", "currency_code": "EUR", "currency_minor_unit": 2}
+  }
+}

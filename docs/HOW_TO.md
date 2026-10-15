@@ -864,6 +864,7 @@ Facts come from tools, not from the LLM’s memory.
 | --- | --- | --- |
 | tea.support slugs / aliases | `data/tea_slugs.json` | `uv run python scripts/build_tea_slugs.py` |
 | teashop.by SKUs | `data/teashop_catalog.json` | `uv run python scripts/parse_teashop.py` |
+| PL/DE Chinese green prices | `data/eu_green_price_index.json` | `uv run python scripts/refresh_eu_price_index.py` |
 
 Shop refresh checklist (every 1–2 weeks):
 
@@ -879,6 +880,20 @@ uv run python scripts/parse_teashop.py --max-pages 6 --dry-run
 ```
 
 Redeploy after catalog commits if Cloud Run should serve the new JSON (image copies `data/` at build time).
+
+### PL/DE Chinese green price index
+
+Daily snapshot of Chinese green teas from Polish and German shops with an open catalog (Shopify `/products.json` or the WooCommerce Store API). The list is `data/eu_green_shops.json`. The agent does not call these shops during a chat; a later price tool only reads the file.
+
+```bash
+uv run python scripts/refresh_eu_price_index.py --status
+uv run python scripts/refresh_eu_price_index.py
+uv run python scripts/refresh_eu_price_index.py --dry-run
+```
+
+The script pages each shop with a 20s timeout, a short pause between pages, and at most two shops at once. The User-Agent is `TeaBotPriceIndex/1.0`. A 429 is retried after the server's Retry-After (up to 90s). A shop that still fails (HTTP error, Cloudflare block, pagination cap) is named in the JSON and contributes no offers. Each offer stores the tea id, shop title, URL, price, currency, pack grams, price per 100 g, stock, and `fetched_at`. Variants with different weights are separate rows. If the pack size is not one clear weight, `pack_size_unclear` is true and `price_per_100g` is null; those rows stay in the file so they are not shown as a comparable price.
+
+Storage matches the teashop.by catalog: JSON under `data/`, copied into the tea-agent image. There is no Cloud Scheduler and no database. After the file changes, redeploy tea-agent so Cloud Run serves it. `--status` exits 1 when `last_checked` is missing or a day old. Each day: run the script, check the summary, commit `data/eu_green_price_index.json`, redeploy.
 
 ---
 
@@ -953,6 +968,7 @@ To confirm per-turn prompt tokens dropped on the cheap path, send two short mess
 | Logs | `gcloud run services logs read tea-agent --project=gen-lang-client-0393777014 --region=europe-central2 --limit=80` |
 | Rebuild slug index | `uv run python scripts/build_tea_slugs.py` |
 | Shop catalog | `uv run python scripts/parse_teashop.py --status` then parse |
+| PL/DE green prices | `uv run python scripts/refresh_eu_price_index.py --status` then refresh; redeploy tea-agent |
 | Grade traces | `uv run python scripts/grade_traces_local.py artifacts/traces/<file>.json` |
 | Add CI/CD later | `agents-cli scaffold enhance` |
 
