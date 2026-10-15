@@ -1,0 +1,142 @@
+[
+  {
+    "id": 20994,
+    "name": "Long Jing Ming Qian",
+    "type": "variable",
+    "permalink": "https://teaeye.pl/product/long-jing-ming-qian/",
+    "is_in_stock": true,
+    "prices": {
+      "price": "1000",
+      "currency_code": "PLN",
+      "currency_minor_unit": 2,
+      "price_range": {"min_amount": "1000", "max_amount": "4500"}
+    },
+    "categories": [{"name": "Herbata zielona"}],
+    "tags": [],
+    "variations": [
+      {"id": 20998, "attributes": [{"name": "Waga", "value": "10g"}]},
+      {"id": 20999, "attributes": [{"name": "Waga", "value": "50g"}]}
+    ],
+    "attributes": [
+      {
+        "name": "Waga",
+        "has_variations": true,
+        "terms": [
+          {"name": "10 g", "slug": "10g"},
+          {"name": "50 g", "slug": "50g"}
+        ]
+      }
+    ]
+  },
+  {
+    "id": 501,
+    "name": "Lu Shan Yun Wu 50 g",
+    "type": "simple",
+    "permalink": "https://example.test/lu-shan-yun-wu/",
+    "is_in_stock": true,
+    "prices": {"price": "3200", "currency_code": "EUR", "currency_minor_unit": 2},
+    "categories": [{"name": "Grüntee"}],
+    "tags": [],
+    "variations": []
+  },
+  {
+    "id": 700,
+    "name": "Organic Mao Feng",
+    "type": "simple",
+    "permalink": "https://example.test/organic-mao-feng/",
+    "is_in_stock": true,
+    "prices": {"price": "2000", "currency_code": "PLN", "currency_minor_unit": 2},
+    "categories": [{"name": "Green Tea"}],
+    "tags": [],
+    "variations": []
+  },
+  {
+    "id": 800,
+    "name": "Bi Luo Chun (Bio) | Ernte 2026 | Bio Grüner Tee aus Yunnan, China",
+    "type": "variable",
+    "permalink": "https://www.tezen.eu/produkt/bi-luo-chun/",
+    "is_in_stock": true,
+    "prices": {
+      "price": "1899",
+      "currency_code": "EUR",
+      "currency_minor_unit": 2,
+      "price_range": {"min_amount": "1899", "max_amount": "3999"}
+    },
+    "categories": [{"name": "Grüner Tee"}],
+    "tags": [],
+    "variations": [
+      {
+        "id": 2474,
+        "attributes": [{"name": "Gewicht", "value": "20-g-washipapier-aromaschutztuete"}]
+      },
+      {
+        "id": 2951,
+        "attributes": [{"name": "Gewicht", "value": "80-g-geschenkdose-mit-holzdeckel"}]
+      }
+    ],
+    "attributes": [
+      {
+        "name": "Gewicht",
+        "has_variations": true,
+        "terms": [
+          {
+            "name": "20 g Washipapier Aromaschutztüte",
+            "slug": "20-g-washipapier-aromaschutztuete"
+          },
+          {
+            "name": "80 g Geschenkdose mit Holzdeckel",
+            "slug": "80-g-geschenkdose-mit-holzdeckel"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": 900,
+    "name": "2025 Huangshan Organic Mao Feng Hong Cha",
+    "type": "variable",
+    "permalink": "https://thetea.pl/produkt/mao-feng-hong-cha/",
+    "is_in_stock": true,
+    "prices": {"price": "4148", "currency_code": "PLN", "currency_minor_unit": 2},
+    "categories": [{"name": "Black Tea"}],
+    "tags": [],
+    "variations": [
+      {"id": 99999, "attributes": [{"name": "Waga", "value": "50-g"}]}
+    ]
+  },
+  {
+    "id": 901,
+    "name": "Nepal Mao Feng",
+    "type": "simple",
+    "permalink": "https://example.test/nepal-mao-feng/",
+    "is_in_stock": true,
+    "prices": {"price": "3500", "currency_code": "PLN", "currency_minor_unit": 2},
+    "categories": [{"name": "Green Tea"}],
+    "tags": [],
+    "variations": []
+  },
+  {
+    "id": 902,
+    "name": "Matcha Ceremonialna – Kagoshima 30 g (Organic)",
+    "type": "simple",
+    "permalink": "https://teaeye.pl/product/matcha/",
+    "is_in_stock": true,
+    "prices": {"price": "22000", "currency_code": "PLN", "currency_minor_unit": 2},
+    "categories": [{"name": "Matcha"}],
+    "tags": [],
+    "variations": []
+  },
+  {
+    "id": 903,
+    "name": "Qi Shan Mao Feng",
+    "type": "variable",
+    "permalink": "https://teaeye.pl/product/qi-shan-mao-feng/",
+    "is_in_stock": false,
+    "prices": {"price": "550", "currency_code": "PLN", "currency_minor_unit": 2},
+    "categories": [{"name": "Green Tea"}],
+    "tags": [],
+    "variations": [
+      {"id": 88888, "attributes": [{"name": "Waga", "value": "10g"}]}
+    ]
+  }
+]
