@@ -48,7 +48,11 @@ _provider: Callable[[datetime], FxQuote | None] | None = None
 
 @dataclass(frozen=True)
 class FxQuote:
-    """One source's BYN-per-unit rates and the dates that source published."""
+    """One source's BYN-per-unit rates and the dates that source published.
+
+    PLN is optional. Vitrine prices only need EUR and USD. A missing PLN leg
+    does not throw away the quote: Polish shop rows then stay unconverted.
+    """
 
     source: str
     fetched_at: datetime
@@ -56,12 +60,20 @@ class FxQuote:
     eur_date: date
     byn_per_usd: Decimal
     usd_date: date
+    byn_per_pln: Decimal | None = None
+    pln_date: date | None = None
 
     def conversion_for(self, currency: str) -> tuple[Decimal, date] | None:
         if currency == "EUR":
             return self.byn_per_eur, self.eur_date
         if currency == "USD":
             return self.byn_per_usd, self.usd_date
+        if (
+            currency == "PLN"
+            and self.byn_per_pln is not None
+            and self.pln_date is not None
+        ):
+            return self.byn_per_pln, self.pln_date
         return None
 
 
@@ -78,7 +90,10 @@ def quote_is_fresh(quote: FxQuote, now: datetime) -> bool:
     age = moment - fetched
     if age >= CACHE_TTL:
         return False
-    rate_day = min(quote.eur_date, quote.usd_date)
+    rate_dates = [quote.eur_date, quote.usd_date]
+    if quote.pln_date is not None:
+        rate_dates.append(quote.pln_date)
+    rate_day = min(rate_dates)
     if moment.date() > rate_day and age >= STALE_DATE_REFRESH:
         return False
     return True
@@ -97,7 +112,8 @@ def set_fx_provider(
 ) -> None:
     """Replace the live fetch. ``None`` restores NBRB then ExchangeRate-API.
 
-    Tests install a fixture here so ``find_in_shop`` does not open a socket.
+    Tests install a fixture here so ``find_in_shop`` and ``find_best_price``
+    do not open a socket.
     """
     global _provider
     with _lock:
@@ -209,10 +225,10 @@ def _nbrb_url(code: str) -> str:
 
 def _fetch_nbrb(getter: HttpGet, now: datetime) -> FxQuote | None:
     payloads: dict[str, Any] = {}
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=3) as pool:
         futures = {
             pool.submit(_read_json, getter, _nbrb_url(code)): code
-            for code in ("EUR", "USD")
+            for code in ("EUR", "USD", "PLN")
         }
         for future in as_completed(futures):
             code = futures[future]
@@ -225,6 +241,7 @@ def _fetch_nbrb(getter: HttpGet, now: datetime) -> FxQuote | None:
     usd = parse_nbrb(payloads.get("USD"))
     if eur is None or usd is None:
         return None
+    pln = parse_nbrb(payloads.get("PLN"))
     return FxQuote(
         source=SOURCE_NBRB,
         fetched_at=now,
@@ -232,14 +249,33 @@ def _fetch_nbrb(getter: HttpGet, now: datetime) -> FxQuote | None:
         eur_date=eur[1],
         byn_per_usd=usd[0],
         usd_date=usd[1],
+        byn_per_pln=None if pln is None else pln[0],
+        pln_date=None if pln is None else pln[1],
     )
 
 
+def _pln_from_erapi(
+    payload: Any, byn_per_eur: Decimal, as_of: date
+) -> tuple[Decimal, date] | None:
+    """BYN per 1 PLN from an EUR-based rate table. None when PLN is absent."""
+    if not isinstance(payload, dict):
+        return None
+    rates = payload.get("rates")
+    if not isinstance(rates, dict):
+        return None
+    pln_per_eur = _decimal(rates.get("PLN"))
+    if pln_per_eur is None:
+        return None
+    return byn_per_eur / pln_per_eur, as_of
+
+
 def _fetch_erapi(getter: HttpGet, now: datetime) -> FxQuote | None:
-    parsed = parse_erapi(_read_json(getter, ERAPI_URL))
+    payload = _read_json(getter, ERAPI_URL)
+    parsed = parse_erapi(payload)
     if parsed is None:
         return None
     byn_per_eur, usd_per_eur, as_of = parsed
+    pln = _pln_from_erapi(payload, byn_per_eur, as_of)
     return FxQuote(
         source=SOURCE_ERAPI,
         fetched_at=now,
@@ -247,6 +283,8 @@ def _fetch_erapi(getter: HttpGet, now: datetime) -> FxQuote | None:
         eur_date=as_of,
         byn_per_usd=byn_per_eur / usd_per_eur,
         usd_date=as_of,
+        byn_per_pln=None if pln is None else pln[0],
+        pln_date=None if pln is None else pln[1],
     )
 
 

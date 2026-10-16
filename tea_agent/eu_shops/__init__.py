@@ -1,5 +1,5 @@
 """Open-catalog readers for the PL/DE Chinese tea price index.
 
-The refresh job writes ``data/eu_green_price_index.json``. A later
-``find_best_price`` tool should read that file and not call shops itself.
+The refresh job writes ``data/eu_green_price_index.json``. ``find_best_price``
+reads that file and does not call shops.
 """

@@ -9,7 +9,8 @@ copied into the tea-agent image at build time; no Cloud SQL):
   4. Commit data/eu_green_price_index.json and redeploy tea-agent
 
 A shop that returns an error is recorded and contributes no offers. Offers with
-an unclear pack size stay in the file with price_per_100g null.
+an unclear pack size stay in the file with price_per_100g null. Chat uses
+find_best_price, which only reads the file and does not refresh shops.
 
 Usage:
   uv run python scripts/refresh_eu_price_index.py --status

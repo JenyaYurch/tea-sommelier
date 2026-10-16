@@ -17,12 +17,15 @@ later turn can rebuild that same block when the tool does not run again.
 «### На витрине» is the teashop.by price, built from price_display. It is not
 the price of a b2btea shop. A tea find_in_shop marked out of stock is one line
 in that block («нет в наличии») and never a «Купить» link.
+«### В Польше и Германии» is find_best_price: up to three in-stock PL/DE
+offers, already converted. It is not a teashop.by price and not a «Купить» link.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date
 from functools import lru_cache
 from typing import Any
 from urllib.parse import urlparse
@@ -50,6 +53,8 @@ ACTION_LABELS: tuple[str, ...] = (
 HEADING = "### Что дальше"
 LOCAL_SHOPS_HEADING = "### Где рядом"
 VITRINE_PRICE_HEADING = "### На витрине"
+EU_PRICE_HEADING = "### В Польше и Германии"
+EU_PRICE_KEY = "temp:eu_price_turn"
 VITRINE_PRICE_NOTE = "Витрина teashop.by. Это не цена магазина рядом."
 VITRINE_OUT_OF_STOCK = "нет в наличии"
 VITRINE_NONE_IN_STOCK = "На витрине teashop.by сейчас нет в наличии подходящих позиций."
@@ -60,6 +65,7 @@ _B2BTEA_HOSTS = frozenset({"b2btea.com", "www.b2btea.com"})
 _MARKETPLACE_BITS = ("amazon.", "wildberries.", "ozon.", "aliexpress.")
 _LOCAL_BLOCK = re.compile(r"(?is)\n*###\s*Где рядом\b.*?(?=\n###\s|\Z)")
 _PRICE_BLOCK = re.compile(r"(?is)\n*###\s*На витрине\b.*?(?=\n###\s|\Z)")
+_EU_BLOCK = re.compile(r"(?is)\n*###\s*В Польше и Германии\b.*?(?=\n###\s|\Z)")
 _MODEL_PRICE = re.compile(
     # ``до 20 EUR`` is a budget. ``(?<![\d.,])`` stops ``20 EUR`` from
     # backtracking into ``0 EUR`` and leaving a stray digit.
@@ -241,6 +247,78 @@ def remove_local_shops_section(text: str) -> str:
 
 def remove_vitrine_price_section(text: str) -> str:
     return _PRICE_BLOCK.sub("\n", text).strip()
+
+
+def remove_eu_price_section(text: str) -> str:
+    return _EU_BLOCK.sub("\n", text).strip()
+
+
+def _snapshot_label(value: Any) -> str:
+    raw = str(value or "")[:10]
+    try:
+        return date.fromisoformat(raw).strftime("%d.%m.%Y")
+    except ValueError:
+        return ""
+
+
+def format_eu_price_section(payload: dict[str, Any] | None) -> str:
+    """Grounded PL/DE prices. Only URLs and amounts from find_best_price."""
+    if not isinstance(payload, dict) or payload.get("status") != "success":
+        return ""
+    offers = [item for item in payload.get("offers") or [] if isinstance(item, dict)]
+    lines: list[str] = []
+    for item in offers[:3]:
+        url = str(item.get("url") or "").strip()
+        price = str(item.get("price") or "").strip()
+        per = str(item.get("price_per_100g") or "").strip()
+        if not url or not price or not per:
+            continue
+        shop = str(item.get("shop") or "Магазин").strip() or "Магазин"
+        name = str(item.get("product_name") or "чай").strip() or "чай"
+        pack = str(item.get("pack_size") or "").strip()
+        pack_bit = f", {pack}" if pack else ""
+        lines.append(f"{shop} — {name}{pack_bit}. {price}; за 100 г {per}. [Товар]({url})")
+    if not lines:
+        return ""
+    note = (
+        "Сохранённый индекс польских и немецких магазинов, не витрина teashop.by. "
+        "Самые дешёвые позиции в наличии, по цене за 100 г."
+    )
+    stamp = _snapshot_label(payload.get("index_date"))
+    if stamp:
+        note += f" Снимок {stamp}."
+    return "\n".join([EU_PRICE_HEADING, note, *lines])
+
+
+def _eu_url_key(url: str) -> str:
+    return url.strip().rstrip("/")
+
+
+def _strip_eu_urls(text: str, payload: dict[str, Any] | None) -> str:
+    """Drop model copies of the index links. Keep the query string on the URL."""
+    keys = set()
+    if isinstance(payload, dict):
+        for item in payload.get("offers") or []:
+            if isinstance(item, dict):
+                url = str(item.get("url") or "").strip()
+                if url:
+                    keys.add(_eu_url_key(url))
+    if not keys:
+        return text
+
+    def _replace_md(match: re.Match[str]) -> str:
+        if _eu_url_key(match.group(2)) in keys:
+            return match.group(1)
+        return match.group(0)
+
+    cleaned = _MD_LINK.sub(_replace_md, text)
+
+    def _replace_bare(match: re.Match[str]) -> str:
+        if _eu_url_key(match.group(0)) in keys:
+            return ""
+        return match.group(0)
+
+    return re.sub(r"https?://[^\s)>\]]+", _replace_bare, cleaned)
 
 
 def strip_model_shop_prices(text: str) -> str:
@@ -688,8 +766,11 @@ def ensure_next_steps(
     *,
     stored_shops: dict[str, Any] | None = None,
     user_text: str | None = None,
+    eu_prices: dict[str, Any] | None = None,
 ) -> str:
-    cleaned = remove_vitrine_price_section(remove_local_shops_section(text))
+    cleaned = remove_eu_price_section(
+        remove_vitrine_price_section(remove_local_shops_section(text))
+    )
     section_payload = _local_shops_for_reply(
         text, local_shops, stored_shops, user_text
     )
@@ -708,7 +789,11 @@ def ensure_next_steps(
     )
     misses = _misses_for_reply(cleaned, unavailable, selected)
     price_section = format_vitrine_price_section(selected, misses)
-    if not should_attach_next_steps(cleaned, selected) and not section and not price_section:
+    eu_section = format_eu_price_section(eu_prices)
+    attach = (
+        should_attach_next_steps(cleaned, selected) or bool(section) or bool(price_section)
+    )
+    if not attach and not eu_section:
         return text
     body = _strip_invented_shop_links(strip_next_steps_block(cleaned))
     if _is_success_shop_payload(section_payload) and section:
@@ -716,18 +801,23 @@ def ensure_next_steps(
     if section:
         body = _strip_url_set(body, _local_shop_urls(section_payload)).strip()
     body = _strip_unbuyable_catalog_links(body)
-    if selected:
+    if selected or eu_section:
         body = strip_model_shop_prices(body)
+    if eu_section:
+        body = _strip_eu_urls(body, eu_prices)
     if _should_drop_stock_denial(body, selected, price_section):
         body = _strip_contradicting_stock_claims(
             body, _tea_names(cleaned, selected, misses)
         )
     parts = [body]
+    if eu_section:
+        parts.append(eu_section)
     if price_section:
         parts.append(price_section)
     if section:
         parts.append(section)
-    parts.append(format_next_steps_block(selected))
+    if attach:
+        parts.append(format_next_steps_block(selected))
     return "\n\n".join(part for part in parts if part)
 
 
@@ -844,12 +934,51 @@ def collect_local_shop_hits(
     return None
 
 
+def collect_eu_price_hits(
+    tool: BaseTool, args: dict, tool_context: ToolContext, tool_response: dict
+) -> dict | None:
+    """Remember find_best_price so the reply block cannot invent a shop link."""
+    del args
+    if getattr(tool, "name", "") != "find_best_price":
+        return None
+    if not isinstance(tool_response, dict):
+        return None
+    offers: list[dict[str, Any]] = []
+    for item in tool_response.get("offers") or []:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        price = str(item.get("price") or "").strip()
+        per = str(item.get("price_per_100g") or "").strip()
+        if not url or not price or not per:
+            continue
+        offers.append(
+            {
+                "shop": str(item.get("shop") or "Магазин").strip() or "Магазин",
+                "product_name": str(item.get("product_name") or "чай").strip() or "чай",
+                "pack_size": str(item.get("pack_size") or "").strip(),
+                "price": price,
+                "price_per_100g": per,
+                "url": url,
+            }
+        )
+        if len(offers) >= 3:
+            break
+    tool_context.state[EU_PRICE_KEY] = {
+        "status": tool_response.get("status"),
+        "index_date": tool_response.get("index_date"),
+        "offers": offers,
+    }
+    return None
+
+
 def collect_turn_hits(
     tool: BaseTool, args: dict, tool_context: ToolContext, tool_response: dict
 ) -> dict | None:
-    """after_tool_callback for catalog buys and local directory shops."""
+    """after_tool_callback for catalog buys, local shops, and PL/DE prices."""
     collect_shop_hits(tool, args, tool_context, tool_response)
     collect_local_shop_hits(tool, args, tool_context, tool_response)
+    collect_eu_price_hits(tool, args, tool_context, tool_response)
     return None
 
 
@@ -878,6 +1007,9 @@ def attach_next_steps_to_response(
         stored, callback_context.state
     ):
         stored = None
+    eu_prices = callback_context.state.get(EU_PRICE_KEY)
+    if not isinstance(eu_prices, dict):
+        eu_prices = None
     updated = ensure_next_steps(
         original,
         products,
@@ -886,6 +1018,7 @@ def attach_next_steps_to_response(
         unavailable=misses,
         stored_shops=stored,
         user_text=_callback_user_text(callback_context),
+        eu_prices=eu_prices,
     )
     if updated == original:
         return None
