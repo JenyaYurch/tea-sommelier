@@ -11,7 +11,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from tea_agent.eu_shops.classify import match_chinese_green
+from tea_agent.eu_shops.classify import match_chinese_tea
 from tea_agent.eu_shops.models import FetchResponse, Shop, ShopResult
 from tea_agent.eu_shops.offer import make_offer
 from tea_agent.eu_shops.pack import resolve_pack, woo_major_price
@@ -42,7 +42,7 @@ def fetch_shop(
     variation_pause_s: float = 0.2,
     sleep: Callable[[float], None] | None = None,
 ) -> ShopResult:
-    """Page the Store API, then fetch variations only for Chinese greens."""
+    """Page the Store API, then fetch variations only for matched Chinese teas."""
     pause = sleep or _noop_sleep
     products, pages, error = _paginate(
         shop,
@@ -59,7 +59,7 @@ def fetch_shop(
     warnings: list[str] = []
     for product in products:
         title = _clean_name(str(product.get("name") or ""))
-        if not title or not match_chinese_green(title, _context(product)):
+        if not title or match_chinese_tea(title, _context(product)) is None:
             continue
         details: dict[int, dict[str, Any]] = {}
         for ref in _variation_refs(product):
@@ -109,8 +109,8 @@ def offers_from_product(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Map one Store API product. Variable products become one offer per variation."""
     title = _clean_name(str(product.get("name") or ""))
-    tea_id = match_chinese_green(title, _context(product))
-    if not title or not tea_id:
+    match = match_chinese_tea(title, _context(product))
+    if not title or match is None:
         return [], []
     refs = _variation_refs(product)
     if product.get("type") == "variable" and not refs:
@@ -131,7 +131,8 @@ def offers_from_product(
                 parent=product,
                 ref=ref,
                 detail=detail,
-                tea_id=tea_id,
+                tea_id=match.tea_id,
+                category=match.category,
                 title=title,
                 shop=shop,
                 fetched_at=fetched_at,
@@ -151,7 +152,8 @@ def offers_from_product(
         return [], []
     return [
         make_offer(
-            tea_id=tea_id,
+            tea_id=match.tea_id,
+            category=match.category,
             title=title,
             shop_id=shop.id,
             shop=shop.name,
@@ -171,6 +173,7 @@ def _offer_from_variation(
     ref: dict[str, Any],
     detail: dict[str, Any],
     tea_id: str,
+    category: str,
     title: str,
     shop: Shop,
     fetched_at: str,
@@ -187,6 +190,7 @@ def _offer_from_variation(
     pack = resolve_pack(_variation_text(parent, ref, detail), title)
     return make_offer(
         tea_id=tea_id,
+        category=category,
         title=title,
         shop_id=shop.id,
         shop=shop.name,

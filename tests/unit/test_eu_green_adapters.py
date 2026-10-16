@@ -75,6 +75,7 @@ def test_shopify_fixture_maps_variants_and_skips_the_rest() -> None:
 
     fifty = by_url["https://shop.example/products/long-jing?variant=501"]
     assert fifty["tea_id"] == "xihu-longjing"
+    assert fifty["category"] == "green"
     assert fifty["title"] == "Long Jing"
     assert fifty["price"] == 25.0
     assert fifty["currency"] == "EUR"
@@ -96,6 +97,7 @@ def test_shopify_fixture_maps_variants_and_skips_the_rest() -> None:
 
     anji = by_url["https://shop.example/products/anji-bai-cha?variant=571"]
     assert anji["tea_id"] == "anji-baicha"
+    assert anji["category"] == "green"
     assert anji["pack_size_g"] == 25
     assert anji["price_per_100g"] == 56.0
 
@@ -273,6 +275,7 @@ def test_woocommerce_403_is_recorded_and_refresh_keeps_other_shops() -> None:
     assert results[1].offers
     assert should_write(results) is None
     document = build_document(results, fetched_at=_FETCHED)
+    assert document["schema_version"] == 2
     assert document["shops"][0]["status"] == "error"
     assert document["count"] == len(results[1].offers)
     assert {offer["tea_id"] for offer in document["offers"]} == {"taiping-hou-kui"}
@@ -288,9 +291,9 @@ def test_retry_delay_backs_off_and_honors_retry_after() -> None:
     assert _retry_delay(_Response({}), 0) == 2.0
     assert _retry_delay(_Response({}), 1) == 4.0
     assert _retry_delay(_Response({}), 2) == 8.0
-    assert _retry_delay(_Response({"Retry-After": "12"}), 0) == 12.0
+    assert _retry_delay(_Response({"Retry-After": "12"}), 0) == 14.0
     assert _retry_delay(_Response({"Retry-After": "1"}), 2) == 8.0
-    assert _retry_delay(_Response({"Retry-After": "60"}), 0) == 60.0
+    assert _retry_delay(_Response({"Retry-After": "60"}), 0) == 62.0
     assert _retry_delay(_Response({"Retry-After": "120"}), 0) == 90.0
 
 

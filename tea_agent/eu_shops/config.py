@@ -7,7 +7,8 @@ from pathlib import Path
 
 from tea_agent.eu_shops.models import Shop
 
-_PLATFORMS = frozenset({"shopify", "woocommerce"})
+_PLATFORMS = frozenset({"shopify", "woocommerce", "html"})
+_HTML_PARSERS = frozenset({"czajownia", "yoshien", "nanyi", "eherbata"})
 
 
 def shops_path() -> Path:
@@ -53,9 +54,24 @@ def _shop_from_row(row: dict) -> Shop:
     if not shop_id or not name or not country:
         raise ValueError(f"shop entry missing id, name, or country: {row!r}")
     if platform not in _PLATFORMS:
-        raise ValueError(f"{shop_id}: platform must be shopify or woocommerce")
+        raise ValueError(f"{shop_id}: platform must be shopify, woocommerce, or html")
     if not base_url.startswith("https://"):
         raise ValueError(f"{shop_id}: base_url must be https")
+    parser_raw = row.get("parser")
+    parser = str(parser_raw).strip().lower() if parser_raw else None
+    raw_urls = row.get("listing_urls") or []
+    if not isinstance(raw_urls, list):
+        raise ValueError(f"{shop_id}: listing_urls must be a list")
+    listing_urls = tuple(str(url).strip() for url in raw_urls if str(url).strip())
+    if platform == "html":
+        if parser not in _HTML_PARSERS:
+            allowed = ", ".join(sorted(_HTML_PARSERS))
+            raise ValueError(f"{shop_id}: html parser must be one of: {allowed}")
+        if not listing_urls:
+            raise ValueError(f"{shop_id}: html shop needs listing_urls")
+        for url in listing_urls:
+            if not url.startswith("https://"):
+                raise ValueError(f"{shop_id}: listing URL must be https")
     return Shop(
         id=shop_id,
         name=name,
@@ -63,4 +79,6 @@ def _shop_from_row(row: dict) -> Shop:
         base_url=base_url,
         country=country,
         currency=currency,
+        parser=parser,
+        listing_urls=listing_urls,
     )

@@ -1,4 +1,4 @@
-"""Refresh the PL/DE Chinese green price index into data/eu_green_price_index.json.
+"""Refresh the PL/DE Chinese tea price index into data/eu_green_price_index.json.
 
 Daily checklist (same storage as the teashop.by catalog: a JSON file under data/,
 copied into the tea-agent image at build time; no Cloud SQL):
@@ -66,7 +66,7 @@ def print_status() -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Refresh the PL/DE Chinese green tea price index"
+        description="Refresh the PL/DE Chinese tea price index"
     )
     parser.add_argument(
         "--status",

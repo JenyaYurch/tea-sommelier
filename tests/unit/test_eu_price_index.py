@@ -24,18 +24,25 @@ _PILOT_SHOPS = {
     "nannuoshan",
     "laifufu",
     "tushita",
+    "eherbata",
+    "czajownia",
+    "yoshien",
+    "nanyi",
 }
 
 
 def test_shop_config_lists_the_pilot_shops() -> None:
     shops = load_shops()
     assert {shop.id for shop in shops} == _PILOT_SHOPS
-    assert {shop.platform for shop in shops} <= {"shopify", "woocommerce"}
+    assert {shop.platform for shop in shops} <= {"shopify", "woocommerce", "html"}
     woo = {shop.id for shop in shops if shop.platform == "woocommerce"}
     shopify = {shop.id for shop in shops if shop.platform == "shopify"}
+    html = {shop.id for shop in shops if shop.platform == "html"}
     assert woo == {"thetea", "teaeye", "czajnikowy", "teasome", "tezen"}
     assert shopify == {"tea-mail", "teewald", "nannuoshan", "laifufu", "tushita"}
+    assert html == {"eherbata", "czajownia", "yoshien", "nanyi"}
     assert all(shop.base_url.startswith("https://") for shop in shops)
+    assert all(shop.parser and shop.listing_urls for shop in shops if shop.platform == "html")
 
 
 def test_index_reader_and_daily_freshness(tmp_path, monkeypatch) -> None:
