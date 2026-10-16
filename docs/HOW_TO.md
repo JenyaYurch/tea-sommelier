@@ -778,7 +778,7 @@ A new tea-agent revision drops in-memory session state, including the saved city
 
 `/currency USD` (also `EUR` or `BYN`, any letter case) stores `currency` on the same in-memory ADK session as the city. `/currency` with no argument sends three inline buttons. The command does not call the model and does not spend a rate-limit token. The allowlist still runs first. `/help` and `/start` mention it.
 
-The bot converts in code, not in the model. National Bank of Belarus is tried first (`https://api.nbrb.by/exrates/rates/{EUR|USD}?parammode=2`, 3 second timeout). If that fails, the keyless fallback is `https://open.er-api.com/v6/latest/EUR` (credited in the reply as ExchangeRate-API). A good quote is kept in the `tea-agent` process for 24 hours, or from 12 hours onward once the calendar day is past the rate date. One failed lookup is not retried for 15 minutes, so a dead host does not stall every tea in the same answer. If both hosts fail, the reply shows the BYN amount only and does not invent a rate.
+The bot converts in code, not in the model. National Bank of Belarus is tried first (`https://api.nbrb.by/exrates/rates/{EUR|USD|PLN}?parammode=2`, 3 second timeout). PLN is an extra leg for Polish shop prices in [§6.5](#65-polish-and-german-shop-prices). If that PLN request fails, the EUR and USD quote is still kept for the vitrine. If NBRB fails entirely, the keyless fallback is `https://open.er-api.com/v6/latest/EUR` (credited in the reply as ExchangeRate-API). That payload's PLN rate is used when it is present. A good quote is kept in the `tea-agent` process for 24 hours, or from 12 hours onward once the calendar day is past the rate date. One failed lookup is not retried for 15 minutes, so a dead host does not stall every tea in the same answer. If both hosts fail, the reply shows the BYN amount only and does not invent a rate.
 
 A price line leads with the chosen currency and keeps the original BYN, the source, and that source's date:
 
@@ -800,6 +800,22 @@ uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014 -
 ```
 
 A new tea-agent revision drops the saved currency along with the city and the taste profile.
+
+---
+
+## 6.5 Polish and German shop prices
+
+`find_best_price` answers “how much in Poland or Germany” from `data/eu_green_price_index.json` only. It does not open shop websites. The same `/currency` choice applies: EUR when unset, otherwise USD or BYN. A saved city does not pick it, and neither does a budget.
+
+The tool keeps in-stock rows with one clear pack size and returns the three lowest prices per 100 g. Unclear packs and sold-out rows stay in the file and are not offered. PLN and EUR are converted with the same NBRB quote as the vitrine (PLN is the extra rate on that quote) and, if NBRB fails, ExchangeRate-API. The line has the same shape as the vitrine, with the shop currency in parentheses:
+
+```text
+~10,00 EUR (40,00 PLN, курс NBRB 04.10.2026)
+```
+
+An amount that is already in the chosen currency is exact, without a tilde. If a rate is missing, offers in that shop currency are left out rather than ranked against a different currency. When every match needs a rate and none is available, the tool returns `fx_unavailable` and an empty list. When nothing in the index matches, it returns `not_found` and an empty list.
+
+The reply code writes `### В Польше и Германии` from the tool result. `### На витрине` stays teashop.by, and «Купить» stays a teashop.by link. No new environment variable. Sessions stay in memory. The allowlist is unchanged.
 
 ---
 
@@ -883,7 +899,7 @@ Redeploy after catalog commits if Cloud Run should serve the new JSON (image cop
 
 ### PL/DE Chinese tea price index
 
-Daily snapshot of Chinese teas from Polish and German shops: green, white, yellow, oolong (including Taiwan), black, pu-erh, and jasmine / osmanthus / ginseng scented teas. Japan, India, Nepal, Ceylon, Kenya, flavoured blends, herbal infusions, teaware, and gift sets stay out. The shop list is `data/eu_green_shops.json`. The index file keeps the name `data/eu_green_price_index.json`. The agent does not call these shops during a chat; a later price tool only reads the file.
+Daily snapshot of Chinese teas from Polish and German shops: green, white, yellow, oolong (including Taiwan), black, pu-erh, and jasmine / osmanthus / ginseng scented teas. Japan, India, Nepal, Ceylon, Kenya, flavoured blends, herbal infusions, teaware, and gift sets stay out. The shop list is `data/eu_green_shops.json`. The index file keeps the name `data/eu_green_price_index.json`. During a chat, `find_best_price` reads only this file and does not call these shops. See [§6.5](#65-polish-and-german-shop-prices).
 
 Shopify shops use `/products.json`. WooCommerce shops use the Store API. Czajownia, Yoshi En, and Nan Yi Tee are read from category HTML (Czajownia product pages only when the tile has no stock or weight price). eHerbata and Czajnikowy stay in the list; a Cloudflare 403 is recorded and the script does not try to get around it.
 
@@ -958,6 +974,7 @@ To confirm per-turn prompt tokens dropped on the cheap path, send two short mess
 | Read beta feedback | [§6.2](#62-in-chat-feedback) (`jsonPayload.log_type="feedback"` on `tea-agent`) |
 | Local shops / city | [§6.3](#63-local-shops-and-city) (`/city`, no new env) |
 | Vitrine currency | [§6.4](#64-vitrine-prices-and-currency) (`/currency`, no new env) |
+| PL/DE shop prices | [§6.5](#65-polish-and-german-shop-prices) (`find_best_price`, no new env) |
 | Local tea-agent HTTP | `uv run uvicorn tea_agent.fast_api_app:app --host 127.0.0.1 --port 8080` |
 | Upsert secrets | `uv run python scripts/setup_secret_manager.py` |
 | Deploy dry-run | `uv run python scripts/deploy_cloud_run.py --project=gen-lang-client-0393777014` |

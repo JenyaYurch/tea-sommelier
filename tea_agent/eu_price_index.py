@@ -1,8 +1,8 @@
-"""Saved PL/DE Chinese tea prices (TEA-51 part 1).
+"""Saved PL/DE Chinese tea prices (TEA-51).
 
 The file is ``data/eu_green_price_index.json``, copied into the tea-agent
-image the same way as ``data/teashop_catalog.json``. A later ``find_best_price``
-tool should read this module and must not call shops during a chat.
+image the same way as ``data/teashop_catalog.json``. ``find_best_price`` reads
+this module and does not call shops during a chat.
 
 Offer fields: ``tea_id``, ``category``, ``title``, ``shop_id``, ``shop``,
 ``url``, ``price``, ``currency``, ``pack_size_g``, ``pack_size_unclear``,

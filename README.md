@@ -77,7 +77,7 @@ Full operational guide (local run, Cloud Run deploy, logs, eval, catalog refresh
 
 ## Telegram
 
-Vitrine amounts in the catalog are BYN. `/currency` shows them in EUR (the default), USD, or BYN. No new environment variable. See [docs/HOW_TO.md](docs/HOW_TO.md) §6.4.
+Vitrine amounts in the catalog are BYN. `/currency` shows them in EUR (the default), USD, or BYN. Polish and German shop prices come from `data/eu_green_price_index.json` through `find_best_price` (the same currency, no live shop calls). No new environment variable. See [docs/HOW_TO.md](docs/HOW_TO.md) §6.4 and §6.5.
 
 Local polling (process must stay running):
 

@@ -1,8 +1,9 @@
-"""Display currency for teashop.by prices.
+"""Display currency for shop prices.
 
 EUR, USD, and BYN. A missing session value is EUR. The city does not pick it.
 Conversion uses a rate quote from ``tea_agent.fx_rates``; this module only
-formats. A missing ``price_from_byn`` stays missing.
+formats. A missing ``price_from_byn`` stays missing. ``convert_money`` is the
+same quote and the same line shape for a PLN or EUR amount from the PL/DE index.
 """
 
 from __future__ import annotations
@@ -35,6 +36,26 @@ class ShownPrice:
     display_currency: str | None
     rate_source: str | None
     rate_date: str | None
+
+
+@dataclass(frozen=True)
+class ConvertedMoney:
+    """One shop amount in the session currency.
+
+    ``amount`` is None when the rate is missing. ``converted`` is false when
+    the shop currency already matches the session currency.
+    """
+
+    amount: Decimal | None
+    text: str | None
+    display_currency: str
+    rate_source: str | None
+    rate_date: str | None
+    converted: bool
+
+
+# Shop rows can be PLN. The session still only displays EUR, USD, or BYN.
+SHOP_PRICE_CURRENCIES: frozenset[str] = frozenset({"EUR", "USD", "BYN", "PLN"})
 
 
 def parse_currency(value: str | None) -> str | None:
@@ -151,6 +172,64 @@ def price_display(
 ) -> str | None:
     """The string to show, or None when ``price_from_byn`` is missing."""
     return show_price(price_from_byn, currency, quote).text
+
+
+def _shop_currency(value: str | None) -> str | None:
+    token = " ".join((value or "").split()).upper()
+    if token in SHOP_PRICE_CURRENCIES:
+        return token
+    return None
+
+
+def _byn_per_unit(quote: RateQuote | None, code: str) -> tuple[Decimal, date | None] | None:
+    """BYN for one unit of ``code``. BYN itself is 1 and has no rate date."""
+    if code == "BYN":
+        return Decimal(1), None
+    return _conversion(quote, code)
+
+
+def convert_money(
+    amount: Any,
+    source_currency: str | None,
+    target_currency: str | None,
+    quote: RateQuote | None = None,
+) -> ConvertedMoney:
+    """Convert a shop amount into the session currency.
+
+    The line matches ``show_price``: a converted amount leads with ``~``, and
+    the original amount, the rate source, and that source's date stay in
+    parentheses. An amount already in the target currency is exact, with no
+    tilde and no invented rate. The pivot is BYN per one unit, the same quote
+    ``/currency`` uses. The date is the earlier of the two legs.
+    """
+    value = _amount(amount)
+    source = _shop_currency(source_currency)
+    target = parse_currency(target_currency) or DEFAULT_CURRENCY
+    if value is None or source is None:
+        return ConvertedMoney(None, None, target, None, None, False)
+    if source == target:
+        shown = value.quantize(_MONEY, rounding=ROUND_HALF_UP)
+        return ConvertedMoney(
+            shown, f"{format_amount(shown)} {target}", target, None, None, False
+        )
+    src_leg = _byn_per_unit(quote, source)
+    dst_leg = _byn_per_unit(quote, target)
+    if src_leg is None or dst_leg is None or quote is None:
+        return ConvertedMoney(None, None, target, None, None, False)
+    src_per, src_date = src_leg
+    dst_per, dst_date = dst_leg
+    converted = (value * src_per / dst_per).quantize(_MONEY, rounding=ROUND_HALF_UP)
+    dates = [stamp for stamp in (src_date, dst_date) if isinstance(stamp, date)]
+    if not dates:
+        return ConvertedMoney(None, None, target, None, None, False)
+    as_of = min(dates)
+    text = (
+        f"~{format_amount(converted)} {target} "
+        f"({format_amount(value)} {source}, курс {quote.source} {as_of.strftime('%d.%m.%Y')})"
+    )
+    return ConvertedMoney(
+        converted, text, target, quote.source, as_of.isoformat(), True
+    )
 
 
 def annotate_product(

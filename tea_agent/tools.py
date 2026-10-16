@@ -1,3 +1,4 @@
+# ruff: noqa: RUF002
 """Function tools: tea.support retrieval + local Chinese-tea slug resolve."""
 
 from __future__ import annotations
@@ -7,6 +8,7 @@ from typing import Any
 
 from google.adk.tools import ToolContext
 
+from tea_agent.best_price import search_best_prices
 from tea_agent.currency import annotate_product, currency_from_state
 from tea_agent.fx_rates import current_fx_quote
 from tea_agent.shop_catalog import find_products
@@ -309,6 +311,33 @@ def find_in_shop(
         ),
         "source": "teashop.by local catalog",
     }
+
+
+def find_best_price(
+    query: str,
+    category: str = "",
+    tool_context: ToolContext | None = None,
+) -> dict[str, Any]:
+    """Find the cheapest in-stock Chinese teas in Polish and German shops.
+
+    Reads only the saved index data/eu_green_price_index.json. Never fetches
+    a shop page. Use this for price questions about Poland, Germany, or those
+    shops. teashop.by stays on find_in_shop.
+
+    Args:
+        query: Tea name, slug, or keywords (лунцзин, Long Jing, tie-guanyin).
+        category: Optional shelf: green, oolong, black, white, pu-erh, yellow,
+            or scented. Empty means any category.
+
+    Returns:
+        Up to 3 in-stock offers with a clear pack size, cheapest price per
+        100 g first. price and price_per_100g are already in the session
+        currency (EUR when unset). offers is empty when nothing matches.
+        Do not invent a shop, price, or link, and do not type the prices:
+        the reply code inserts «### В Польше и Германии».
+    """
+    state = None if tool_context is None else getattr(tool_context, "state", None)
+    return search_best_prices(query, category, state)
 
 
 def _quote_for(currency: str, rows: list[dict[str, Any]]) -> Any:

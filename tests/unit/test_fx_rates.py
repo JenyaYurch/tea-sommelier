@@ -185,6 +185,75 @@ def test_cache_refreshes_when_the_rate_date_is_already_behind(
     assert calls == [monday]
 
 
+def test_pln_is_optional_on_nbrb_and_present_when_the_payload_parses() -> None:
+    def getter(url: str, timeout: float) -> tuple[int, bytes]:
+        assert timeout == FX_TIMEOUT_SEC
+        if "/EUR?" in url:
+            return 200, _body("nbrb_eur.json")
+        if "/USD?" in url:
+            return 200, _body("nbrb_usd.json")
+        if "/PLN?" in url:
+            payload = {
+                "Cur_OfficialRate": "9.20",
+                "Cur_Scale": 10,
+                "Date": "2026-10-03T00:00:00",
+            }
+            return 200, json.dumps(payload).encode("utf-8")
+        raise AssertionError(url)
+
+    quote = fetch_fx_quote(http_get=getter, now=NOW)
+    assert quote is not None
+    assert quote.source == SOURCE_NBRB
+    assert quote.byn_per_eur == Decimal("3.3818")
+    assert quote.byn_per_pln == Decimal("0.92")
+    assert quote.pln_date == date(2026, 10, 3)
+    assert quote.conversion_for("PLN") == (Decimal("0.92"), date(2026, 10, 3))
+
+
+def test_missing_pln_does_not_drop_the_eur_usd_quote() -> None:
+    quote = fetch_fx_quote(http_get=_nbrb_get, now=NOW)
+    assert quote is not None
+    assert quote.source == SOURCE_NBRB
+    assert quote.byn_per_pln is None
+    assert quote.conversion_for("PLN") is None
+    assert quote.conversion_for("EUR")[0] == Decimal("3.3818")
+
+
+def test_erapi_pln_is_byn_per_one_zloty() -> None:
+    payload = _json("erapi_eur.json")
+    payload["rates"]["PLN"] = 4
+    body = json.dumps(payload, default=str).encode("utf-8")
+
+    def getter(url: str, timeout: float) -> tuple[int, bytes]:
+        del timeout
+        if "nbrb.by" in url:
+            raise TimeoutError("timed out")
+        if "open.er-api.com" in url:
+            return 200, body
+        raise AssertionError(url)
+
+    quote = fetch_fx_quote(http_get=getter, now=NOW)
+    assert quote is not None
+    assert quote.source == SOURCE_ERAPI
+    assert quote.byn_per_pln == Decimal("3.381805") / Decimal("4")
+    assert quote.pln_date == date(2026, 10, 4)
+
+
+def test_stale_pln_date_refreshes_the_shared_quote() -> None:
+    quote = FxQuote(
+        source=SOURCE_NBRB,
+        fetched_at=datetime(2026, 10, 4, 6, 0, tzinfo=UTC),
+        byn_per_eur=Decimal("4"),
+        eur_date=date(2026, 10, 4),
+        byn_per_usd=Decimal("2"),
+        usd_date=date(2026, 10, 4),
+        byn_per_pln=Decimal("1"),
+        pln_date=date(2026, 10, 3),
+    )
+    later = datetime(2026, 10, 4, 20, 0, tzinfo=UTC)
+    assert quote_is_fresh(quote, later) is False
+
+
 def test_failed_lookup_is_not_retried_immediately(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[datetime | None] = []
 
